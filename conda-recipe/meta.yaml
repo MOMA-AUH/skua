@@ -1,0 +1,34 @@
+{% set name = "skua" %}
+{% set version = "0.0.0" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=69
+    - wheel
+  run:
+    - python >=3.10
+
+test:
+  imports:
+    - skua
+  commands:
+    - python -c "from skua import hello; assert hello('shearwater') == 'Hello, shearwater!'"
+
+about:
+  home: https://github.com/micknudsen/skua
+  summary: Predatory and kleptoparasitic variant caller for detecting subclonal mutations in deep sequencing data
+  license: MIT
+  license_file: LICENSE
