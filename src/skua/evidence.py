@@ -42,8 +42,52 @@ def classify_snv_read(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> ReadAlleleCall:
-    """Classify one read as ALT, NON_ALT, or UNUSABLE for a single SNV.
+    """Classify one read as ALT, NON_ALT, or UNUSABLE for a single SNV."""
+    if read.mapping_quality < min_mapq:
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=read.is_reverse,
+            reason=UnusableReason.LOW_MAPQ,
+        )
 
-    This is intentionally left unimplemented for TDD; tests define the behavior.
-    """
-    raise NotImplementedError("read-level SNV classification is not implemented yet")
+    query_pos: int | None = None
+    for qpos, rpos in read.aligned_pairs:
+        if rpos == ref_pos0:
+            query_pos = qpos
+            break
+
+    if query_pos is None:
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=read.is_reverse,
+            reason=UnusableReason.NO_BASE_AT_SITE,
+        )
+
+    observed_base = read.query_sequence[query_pos]
+    base_quality = read.query_qualities[query_pos]
+
+    if observed_base not in {"A", "C", "G", "T"}:
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=read.is_reverse,
+            reason=UnusableReason.INVALID_BASE,
+            observed_base=observed_base,
+            base_quality=base_quality,
+        )
+
+    if base_quality < min_baseq:
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=read.is_reverse,
+            reason=UnusableReason.LOW_BASEQ,
+            observed_base=observed_base,
+            base_quality=base_quality,
+        )
+
+    support = AlleleSupport.ALT if observed_base == alt_base else AlleleSupport.NON_ALT
+    return ReadAlleleCall(
+        support=support,
+        is_reverse=read.is_reverse,
+        observed_base=observed_base,
+        base_quality=base_quality,
+    )
