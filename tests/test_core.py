@@ -1,16 +1,7 @@
 from dataclasses import dataclass
 
-from skua import hello
 from skua.core import verify_snv_variant
 from skua.variants import Variant
-
-
-def test_hello_default() -> None:
-    assert hello() == "Hello, world!"
-
-
-def test_hello_custom_name() -> None:
-    assert hello("Skua") == "Hello, Skua!"
 
 
 @dataclass

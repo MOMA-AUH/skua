@@ -6,11 +6,6 @@ from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
 from .variants import Variant
 
 
-def hello(name: str = "world") -> str:
-    """Return a friendly greeting string."""
-    return f"Hello, {name}!"
-
-
 def verify_snv_variant(
     alignment_file: Any,
     variant: Variant,
