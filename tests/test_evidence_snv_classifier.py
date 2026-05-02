@@ -1,19 +1,5 @@
-from dataclasses import dataclass
-
 from skua.evidence import AlleleSupport, UnusableReason, classify_snv_read
-
-
-@dataclass
-class FakeRead:
-    mapping_quality: int
-    is_reverse: bool
-    query_sequence: str
-    query_qualities: list[int]
-    aligned_pairs: list[tuple[int | None, int | None]]
-
-
-def build_linear_pairs(read_len: int, ref_start: int) -> list[tuple[int, int]]:
-    return [(qpos, ref_start + qpos) for qpos in range(read_len)]
+from tests.helpers import FakeRead, build_linear_pairs
 
 
 def test_classify_alt_on_forward_strand() -> None:
