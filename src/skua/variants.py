@@ -14,11 +14,13 @@ class Variant:
 
     @classmethod
     def from_vcf_fields(cls, *, contig: str, pos1: int, ref: str, alt: str) -> "Variant":
-        """Build a Variant from basic VCF fields.
+        """Build a Variant from basic VCF fields."""
+        if pos1 < 1:
+            raise ValueError("VCF POS must be >= 1")
+        if len(ref) != 1 or len(alt) != 1:
+            raise ValueError("SNV variants require single-base REF and ALT")
 
-        This is intentionally left unimplemented for TDD.
-        """
-        raise NotImplementedError("Variant.from_vcf_fields is not implemented yet")
+        return cls(contig=contig, ref_pos0=pos1 - 1, ref=ref, alt=alt)
 
 
 def parse_vcf_snv_line(line: str) -> Variant | None:
