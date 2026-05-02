@@ -148,3 +148,16 @@ def aggregate_read_calls(calls: Iterable[ReadAlleleCall]) -> AggregatedEvidence:
         unusable=unusable,
         unusable_by_reason=dict(unusable_by_reason),
     )
+
+
+def collect_snv_evidence(
+    reads: Iterable[Any],
+    *,
+    ref_pos0: int,
+    ref_base: str,
+    alt_base: str,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> AggregatedEvidence:
+    """Collect strand-aware evidence for one SNV from an iterable of reads."""
+    raise NotImplementedError("SNV evidence collection is not implemented yet")
