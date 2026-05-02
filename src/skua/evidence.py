@@ -160,4 +160,15 @@ def collect_snv_evidence(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one SNV from an iterable of reads."""
-    raise NotImplementedError("SNV evidence collection is not implemented yet")
+    calls = [
+        classify_snv_read(
+            read,
+            ref_pos0=ref_pos0,
+            ref_base=ref_base,
+            alt_base=alt_base,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+        )
+        for read in reads
+    ]
+    return aggregate_read_calls(calls)
