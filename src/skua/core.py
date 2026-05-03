@@ -90,3 +90,26 @@ def write_verification_results_json(
         render_verification_results_json(rows),
         encoding="utf-8",
     )
+
+
+def verify_snv_vcf_to_json(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> str:
+    """Run SNV verification from VCF and return JSON output, optionally writing to file."""
+    rows = format_verification_results(
+        verify_snv_variants_from_vcf(
+            alignment_file,
+            vcf_path,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+        )
+    )
+    payload = render_verification_results_json(rows)
+    if output_path is not None:
+        Path(output_path).write_text(payload, encoding="utf-8")
+    return payload
