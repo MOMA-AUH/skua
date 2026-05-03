@@ -31,6 +31,7 @@ def test_compute_strand_aware_pon_stats_returns_typed_background_and_score() -> 
     assert stats.expected_case_counts["alt_forward"] == 0.5
     assert stats.channel_score_contribution["alt_forward"] > 0.0
     assert stats.combined_score > 0.0
+    assert 0.0 <= stats.p_value <= 1.0
 
 
 def test_compute_strand_aware_pon_stats_is_stable_for_zero_depth() -> None:
@@ -65,3 +66,41 @@ def test_compute_strand_aware_pon_stats_is_stable_for_zero_depth() -> None:
         "non_alt_reverse": 0.0,
     }
     assert stats.combined_score == 0.0
+    assert stats.p_value == 1.0
+
+
+def test_compute_strand_aware_pon_stats_p_value_decreases_with_stronger_signal() -> None:
+    normal_evidence = AggregatedEvidence(
+        alt_forward=1,
+        alt_reverse=1,
+        non_alt_forward=9,
+        non_alt_reverse=9,
+        usable=20,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    weaker_case = AggregatedEvidence(
+        alt_forward=3,
+        alt_reverse=0,
+        non_alt_forward=7,
+        non_alt_reverse=0,
+        usable=10,
+        unusable=0,
+        unusable_by_reason={},
+    )
+    stronger_case = AggregatedEvidence(
+        alt_forward=8,
+        alt_reverse=0,
+        non_alt_forward=2,
+        non_alt_reverse=0,
+        usable=10,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    weaker_stats = compute_strand_aware_pon_stats(weaker_case, normal_evidence)
+    stronger_stats = compute_strand_aware_pon_stats(stronger_case, normal_evidence)
+
+    assert stronger_stats.combined_score > weaker_stats.combined_score
+    assert stronger_stats.p_value < weaker_stats.p_value

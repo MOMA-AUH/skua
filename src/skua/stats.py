@@ -24,6 +24,7 @@ class StrandAwarePonStats:
     expected_case_counts: dict[str, float]
     channel_score_contribution: dict[str, float]
     combined_score: float
+    p_value: float
 
     def to_dict(self) -> dict[str, dict[str, float | int] | float]:
         """Return a JSON-serializable representation."""
@@ -34,6 +35,7 @@ class StrandAwarePonStats:
             "expected_case_counts": dict(self.expected_case_counts),
             "channel_score_contribution": dict(self.channel_score_contribution),
             "combined_score": self.combined_score,
+            "p_value": self.p_value,
         }
 
 
@@ -80,6 +82,10 @@ def compute_strand_aware_pon_stats(
     combined_score = math.sqrt(
         sum(contribution * contribution for contribution in channel_score_contribution.values())
     )
+    chi2_stat = combined_score * combined_score
+    # Survival function for Chi-square with k=4 degrees of freedom:
+    # sf(x) = exp(-x/2) * (1 + x/2)
+    p_value = math.exp(-chi2_stat / 2.0) * (1.0 + chi2_stat / 2.0)
 
     return StrandAwarePonStats(
         case_counts=case_counts,
@@ -88,4 +94,5 @@ def compute_strand_aware_pon_stats(
         expected_case_counts=expected_case_counts,
         channel_score_contribution=channel_score_contribution,
         combined_score=combined_score,
+        p_value=p_value,
     )
