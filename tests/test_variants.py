@@ -1,3 +1,5 @@
+import gzip
+
 import pytest
 
 from skua.variants import Variant, parse_vcf_snv_line, read_vcf_snv_file
@@ -62,6 +64,26 @@ def test_read_vcf_snv_file_yields_snv_records_only(tmp_path) -> None:
         )
         + "\n"
     )
+
+    variants = list(read_vcf_snv_file(vcf_path))
+
+    assert variants == [Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")]
+
+
+def test_read_vcf_snv_file_yields_snv_records_from_gzipped_input(tmp_path) -> None:
+    vcf_path = tmp_path / "input.vcf.gz"
+    with gzip.open(vcf_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "##fileformat=VCFv4.2",
+                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                    "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+                    "chr1\t200\t.\tA\tAT\t.\tPASS\t.",
+                ]
+            )
+            + "\n"
+        )
 
     variants = list(read_vcf_snv_file(vcf_path))
 

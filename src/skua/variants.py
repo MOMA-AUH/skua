@@ -1,5 +1,6 @@
 """Variant parsing and normalization helpers."""
 
+import gzip
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -52,7 +53,13 @@ def parse_vcf_snv_line(line: str) -> Variant | None:
 
 def read_vcf_snv_file(path: str | Path) -> Iterator[Variant]:
     """Yield SNV variants from a VCF file, skipping unsupported records."""
-    with Path(path).open("r", encoding="utf-8") as handle:
+    path_obj = Path(path)
+    if path_obj.suffix == ".gz":
+        handle_cm = gzip.open(path_obj, "rt", encoding="utf-8")
+    else:
+        handle_cm = path_obj.open("r", encoding="utf-8")
+
+    with handle_cm as handle:
         for line in handle:
             variant = parse_vcf_snv_line(line)
             if variant is not None:
