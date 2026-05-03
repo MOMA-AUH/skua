@@ -30,10 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument("--output", help="Optional output JSON path")
     verify_parser.add_argument(
-        "--normal",
-        nargs="+",
-        action="append",
-        help="Normal sample BAM/CRAM paths for PON comparison",
+        "--normal-list",
+        help="Path to file listing normal sample BAM/CRAM paths, one per line",
     )
     verify_parser.add_argument("--min-baseq", type=int, default=20, help="Minimum base quality")
     verify_parser.add_argument("--min-mapq", type=int, default=20, help="Minimum mapping quality")
@@ -58,9 +56,11 @@ def main(argv: list[str] | None = None) -> int:
         # Open normal alignments if provided
         normal_alignments = []
         normal_paths: list[str] = []
-        if args.normal is not None:
-            for normal_group in args.normal:
-                normal_paths.extend(normal_group)
+        if args.normal_list is not None:
+            for line in Path(args.normal_list).read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    normal_paths.append(stripped)
 
         if normal_paths:
             for normal_path in normal_paths:

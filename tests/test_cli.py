@@ -236,7 +236,7 @@ def test_main_verify_prints_tsv_when_format_tsv(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out == "col1\tcol2\nA\tB\n\n"
 
 
-def test_main_verify_with_normal_uses_pon_functions(monkeypatch, capsys) -> None:
+def test_main_verify_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_path) -> None:
     calls: list[dict[str, object]] = []
 
     class FakeAlignmentFile:
@@ -268,6 +268,9 @@ def test_main_verify_with_normal_uses_pon_functions(monkeypatch, capsys) -> None
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(cli, "verify_snv_vcf_to_json_with_normals", fake_verify_with_normals)
 
+    normal_list_path = tmp_path / "normals.txt"
+    normal_list_path.write_text("normal1.bam\nnormal2.bam\n", encoding="utf-8")
+
     exit_code = cli.main(
         [
             "verify",
@@ -275,10 +278,8 @@ def test_main_verify_with_normal_uses_pon_functions(monkeypatch, capsys) -> None
             "input.vcf",
             "--alignment",
             "case.bam",
-            "--normal",
-            "normal1.bam",
-            "--normal",
-            "normal2.bam",
+            "--normal-list",
+            str(normal_list_path),
         ]
     )
 
