@@ -1,4 +1,9 @@
-from skua.core import verify_snv_variant, verify_snv_variants_from_vcf
+from skua.core import (
+    format_verification_results,
+    verify_snv_variant,
+    verify_snv_variants_from_vcf,
+)
+from skua.evidence import AggregatedEvidence, UnusableReason
 from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 from skua.variants import Variant
 
@@ -91,3 +96,38 @@ def test_verify_snv_variants_from_vcf_processes_snv_records_only(tmp_path) -> No
     assert counts.non_alt_reverse == 1
     assert counts.usable == 2
     assert counts.unusable == 0
+
+
+def test_format_verification_results_returns_json_ready_records() -> None:
+    results = [
+        (
+            Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
+            AggregatedEvidence(
+                alt_forward=1,
+                alt_reverse=2,
+                non_alt_forward=3,
+                non_alt_reverse=4,
+                usable=10,
+                unusable=2,
+                unusable_by_reason={UnusableReason.LOW_MAPQ: 2},
+            ),
+        )
+    ]
+
+    records = format_verification_results(results)
+
+    assert records == [
+        {
+            "contig": "chr1",
+            "pos1": 106,
+            "ref": "A",
+            "alt": "T",
+            "alt_forward": 1,
+            "alt_reverse": 2,
+            "non_alt_forward": 3,
+            "non_alt_reverse": 4,
+            "usable": 10,
+            "unusable": 2,
+            "unusable_by_reason": {"low_mapq": 2},
+        }
+    ]
