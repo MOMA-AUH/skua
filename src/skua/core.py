@@ -1,9 +1,11 @@
 """Core public API for skua."""
 
+from pathlib import Path
 from typing import Any
+from typing import Iterator
 
 from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
-from .variants import Variant
+from .variants import Variant, read_vcf_snv_file
 
 
 def verify_snv_variant(
@@ -23,3 +25,23 @@ def verify_snv_variant(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
     )
+
+
+def verify_snv_variants_from_vcf(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> Iterator[tuple[Variant, AggregatedEvidence]]:
+    """Yield per-variant evidence for SNV records from a VCF file."""
+    for variant in read_vcf_snv_file(vcf_path):
+        yield (
+            variant,
+            verify_snv_variant(
+                alignment_file,
+                variant,
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+            ),
+        )
