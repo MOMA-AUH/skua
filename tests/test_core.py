@@ -506,6 +506,8 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     assert result[0]["normal_unusable_by_reason"] == {}
     assert result[0]["normals_with_alt"] == 0
     assert result[0]["normals_with_ref_only"] == 1
+    assert result[0]["strand_aware_pon_stats"]["background_rate_by_channel"]["non_alt_forward"] == 1.0
+    assert result[0]["strand_aware_pon_stats"]["combined_score"] > 0.0
 
 
 def test_verify_snv_vcf_to_tsv_with_normals_returns_pon_payload(tmp_path) -> None:
@@ -561,4 +563,5 @@ def test_verify_snv_vcf_to_tsv_with_normals_returns_pon_payload(tmp_path) -> Non
     assert "normal_unusable_by_reason" in lines[0]
     assert "normals_with_alt" in lines[0]
     assert "normals_with_ref_only" in lines[0]
+    assert "strand_aware_pon_stats" in lines[0]
     assert "chr1\t106\tA\tT" in lines[1]

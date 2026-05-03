@@ -8,6 +8,7 @@ from typing import Iterable
 from typing import Iterator
 
 from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
+from .stats import compute_strand_aware_pon_stats
 from .variants import Variant, read_vcf_snv_file
 
 
@@ -300,6 +301,10 @@ def format_verification_results_with_normals(
     for variant, pon_result in results:
         evidence = pon_result["case_evidence"]
         normal_aggregate_evidence = pon_result["normal_aggregate_evidence"]
+        strand_aware_pon_stats = compute_strand_aware_pon_stats(
+            evidence,
+            normal_aggregate_evidence,
+        )
         rows.append(
             {
                 "contig": variant.contig,
@@ -328,6 +333,7 @@ def format_verification_results_with_normals(
                 },
                 "normals_with_alt": pon_result["normals_with_alt"],
                 "normals_with_ref_only": pon_result["normals_with_ref_only"],
+                "strand_aware_pon_stats": strand_aware_pon_stats.to_dict(),
             }
         )
     return rows
@@ -356,13 +362,14 @@ def render_verification_results_tsv_with_normals(rows: Iterable[dict[str, Any]])
         "normal_unusable_by_reason",
         "normals_with_alt",
         "normals_with_ref_only",
+        "strand_aware_pon_stats",
     ]
     lines = ["\t".join(columns)]
     for row in rows:
         serialized_row: list[str] = []
         for column in columns:
             value = row[column]
-            if column in {"unusable_by_reason", "normal_unusable_by_reason"}:
+            if column in {"unusable_by_reason", "normal_unusable_by_reason", "strand_aware_pon_stats"}:
                 serialized_row.append(json.dumps(value, sort_keys=True, separators=(",", ":")))
             else:
                 serialized_row.append(str(value))
