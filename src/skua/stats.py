@@ -25,6 +25,11 @@ class StrandAwarePonStats:
     channel_score_contribution: dict[str, float]
     combined_score: float
     p_value: float
+    method: str
+    degrees_of_freedom: int
+    pseudocount: float
+    min_expected_count: float
+    approximation_warning: bool
 
     def to_dict(self) -> dict[str, dict[str, float | int] | float]:
         """Return a JSON-serializable representation."""
@@ -36,6 +41,11 @@ class StrandAwarePonStats:
             "channel_score_contribution": dict(self.channel_score_contribution),
             "combined_score": self.combined_score,
             "p_value": self.p_value,
+            "method": self.method,
+            "degrees_of_freedom": self.degrees_of_freedom,
+            "pseudocount": self.pseudocount,
+            "min_expected_count": self.min_expected_count,
+            "approximation_warning": self.approximation_warning,
         }
 
 
@@ -70,6 +80,9 @@ def compute_strand_aware_pon_stats(
         channel: case_total * background_rate_by_channel[channel]
         for channel in _CHANNELS
     }
+    min_expected_count = min(expected_case_counts.values()) if expected_case_counts else 0.0
+    # Rule of thumb: chi-square approximation is less reliable when expected counts are small.
+    approximation_warning = min_expected_count < 5.0
     channel_score_contribution = {
         channel: (
             (case_counts[channel] - expected_case_counts[channel])
@@ -95,4 +108,9 @@ def compute_strand_aware_pon_stats(
         channel_score_contribution=channel_score_contribution,
         combined_score=combined_score,
         p_value=p_value,
+        method="chi_square_4channel_approx",
+        degrees_of_freedom=4,
+        pseudocount=pseudocount,
+        min_expected_count=min_expected_count,
+        approximation_warning=approximation_warning,
     )

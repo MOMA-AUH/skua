@@ -32,6 +32,11 @@ def test_compute_strand_aware_pon_stats_returns_typed_background_and_score() -> 
     assert stats.channel_score_contribution["alt_forward"] > 0.0
     assert stats.combined_score > 0.0
     assert 0.0 <= stats.p_value <= 1.0
+    assert stats.method == "chi_square_4channel_approx"
+    assert stats.degrees_of_freedom == 4
+    assert stats.pseudocount == 0.5
+    assert stats.min_expected_count == 0.5
+    assert stats.approximation_warning is True
 
 
 def test_compute_strand_aware_pon_stats_is_stable_for_zero_depth() -> None:
@@ -67,6 +72,11 @@ def test_compute_strand_aware_pon_stats_is_stable_for_zero_depth() -> None:
     }
     assert stats.combined_score == 0.0
     assert stats.p_value == 1.0
+    assert stats.method == "chi_square_4channel_approx"
+    assert stats.degrees_of_freedom == 4
+    assert stats.pseudocount == 0.5
+    assert stats.min_expected_count == 0.0
+    assert stats.approximation_warning is True
 
 
 def test_compute_strand_aware_pon_stats_p_value_decreases_with_stronger_signal() -> None:
@@ -104,3 +114,29 @@ def test_compute_strand_aware_pon_stats_p_value_decreases_with_stronger_signal()
 
     assert stronger_stats.combined_score > weaker_stats.combined_score
     assert stronger_stats.p_value < weaker_stats.p_value
+
+
+def test_compute_strand_aware_pon_stats_can_disable_warning_with_large_expected_counts() -> None:
+    case_evidence = AggregatedEvidence(
+        alt_forward=50,
+        alt_reverse=50,
+        non_alt_forward=50,
+        non_alt_reverse=50,
+        usable=200,
+        unusable=0,
+        unusable_by_reason={},
+    )
+    normal_evidence = AggregatedEvidence(
+        alt_forward=250,
+        alt_reverse=250,
+        non_alt_forward=250,
+        non_alt_reverse=250,
+        usable=1000,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    stats = compute_strand_aware_pon_stats(case_evidence, normal_evidence)
+
+    assert stats.min_expected_count == 50.0
+    assert stats.approximation_warning is False

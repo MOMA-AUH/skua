@@ -509,6 +509,10 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     assert result[0]["strand_aware_pon_stats"]["background_rate_by_channel"]["non_alt_forward"] == 1.0
     assert result[0]["strand_aware_pon_stats"]["combined_score"] > 0.0
     assert 0.0 <= result[0]["strand_aware_pon_stats"]["p_value"] <= 1.0
+    assert result[0]["strand_aware_pon_stats"]["method"] == "chi_square_4channel_approx"
+    assert result[0]["strand_aware_pon_stats"]["degrees_of_freedom"] == 4
+    assert result[0]["strand_aware_pon_stats"]["pseudocount"] == 0.5
+    assert result[0]["strand_aware_pon_stats"]["approximation_warning"] is True
 
 
 def test_verify_snv_vcf_to_tsv_with_normals_returns_pon_payload(tmp_path) -> None:
