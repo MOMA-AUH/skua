@@ -242,7 +242,7 @@ def format_verification_results_with_normals(
     for variant, pon_result in results:
         evidence = pon_result["case_evidence"]
         normal_aggregate_evidence = pon_result["normal_aggregate_evidence"]
-        statistics = compute_stats(
+        stats = compute_stats(
             evidence,
             normal_aggregate_evidence,
         )
@@ -276,7 +276,7 @@ def format_verification_results_with_normals(
                         for reason, count in normal_aggregate_evidence.unusable_by_reason.items()
                     },
                 },
-                "statistics": statistics.to_dict(),
+                "stats": stats.to_dict(),
             }
         )
     return rows
