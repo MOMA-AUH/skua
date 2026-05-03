@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+skua = "skua.cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pysam>=0.22",
