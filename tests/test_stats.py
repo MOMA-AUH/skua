@@ -168,3 +168,37 @@ def test_compute_stats_uses_estimated_rho_from_per_sample_evidences() -> None:
     # but dispersion_rho reflects the actual estimated value not the kwarg default)
     assert stats_estimated.dispersion_rho == estimate_rho(per_sample)
     assert stats_fixed.dispersion_rho == 1e-4
+
+
+def test_compute_stats_applies_truncation_to_background_pool() -> None:
+    case_evidence = _make_normal(4, 0, 10)
+
+    low_background = [_make_normal(1, 0, 200) for _ in range(10)]
+    high_background_outlier = _make_normal(40, 10, 100)
+    per_sample = low_background + [high_background_outlier]
+
+    normal_aggregate = AggregatedEvidence(
+        alt_forward=sum(s.alt_forward for s in per_sample),
+        alt_reverse=sum(s.alt_reverse for s in per_sample),
+        non_alt_forward=sum(s.non_alt_forward for s in per_sample),
+        non_alt_reverse=sum(s.non_alt_reverse for s in per_sample),
+        usable=sum(s.usable for s in per_sample),
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    untruncated = compute_stats(
+        case_evidence,
+        normal_aggregate,
+        per_sample_evidences=per_sample,
+        truncate=1.0,
+    )
+    truncated = compute_stats(
+        case_evidence,
+        normal_aggregate,
+        per_sample_evidences=per_sample,
+        truncate=0.1,
+    )
+
+    assert truncated.bayes_factor < untruncated.bayes_factor
+    assert truncated.artifact_posterior < untruncated.artifact_posterior

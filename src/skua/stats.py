@@ -126,6 +126,7 @@ def compute_stats(
     *,
     rho: float = 1e-4,
     per_sample_evidences: list[AggregatedEvidence] | None = None,
+    truncate: float = 0.1,
     pseudocount: float = 0.5,
     prior_variant_probability: float = 0.5,
     mu_min: float = 1e-6,
@@ -143,7 +144,7 @@ def compute_stats(
     (``estimate_rho``), replacing the fixed ``rho`` default.
     """
     if per_sample_evidences is not None:
-        rho = estimate_rho(per_sample_evidences)
+        rho = estimate_rho(per_sample_evidences, truncate=truncate)
     case_counts = {
         "alt_forward": case_evidence.alt_forward,
         "alt_reverse": case_evidence.alt_reverse,
@@ -178,6 +179,27 @@ def compute_stats(
     X_bw = normal_counts["alt_reverse"]
     N_fw = X_fw + normal_counts["non_alt_forward"]
     N_bw = X_bw + normal_counts["non_alt_reverse"]
+
+    if per_sample_evidences:
+        # Shearwater-style truncation: exclude high-background PON samples
+        # from the background pool used in Bayes-factor terms.
+        masked = []
+        for sample in per_sample_evidences:
+            sample_alt = sample.alt_forward + sample.alt_reverse
+            sample_depth = (
+                sample.alt_forward
+                + sample.alt_reverse
+                + sample.non_alt_forward
+                + sample.non_alt_reverse
+            )
+            sample_mu = (sample_alt + sys.float_info.epsilon) / (sample_depth + sys.float_info.epsilon)
+            if sample_mu < truncate:
+                masked.append(sample)
+
+        X_fw = sum(sample.alt_forward for sample in masked)
+        X_bw = sum(sample.alt_reverse for sample in masked)
+        N_fw = sum(sample.alt_forward + sample.non_alt_forward for sample in masked)
+        N_bw = sum(sample.alt_reverse + sample.non_alt_reverse for sample in masked)
 
     if case_total == 0:
         log_bayes_factor = 0.0
