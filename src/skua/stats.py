@@ -24,7 +24,7 @@ class Stats:
     expected_case_counts: dict[str, float]
     bayes_factor: float
     log_bayes_factor_artifact_vs_variant: float
-    posterior_probability: float
+    artifact_posterior: float
     dispersion_rho: float
     pseudocount: float
 
@@ -32,7 +32,7 @@ class Stats:
         """Return a JSON-serializable representation."""
         return {
             "bayes_factor": self.bayes_factor,
-            "posterior_probability": self.posterior_probability,
+            "artifact_posterior": self.artifact_posterior,
         }
 
 
@@ -62,7 +62,9 @@ def compute_stats(
     """Compute a Shearwater-style beta-binomial Bayes-factor summary.
 
     The Bayes factor is oriented as artifact-vs-variant (null/alternative),
-    consistent with the original deepSNV Shearwater code path.
+    consistent with the original deepSNV Shearwater code path. The reported
+    posterior probability matches Shearwater's posterior for the null/artifact
+    model M0, so lower values indicate stronger evidence for a true variant.
     """
     case_counts = {
         "alt_forward": case_evidence.alt_forward,
@@ -150,7 +152,7 @@ def compute_stats(
 
     prior_variant_probability = _bound(prior_variant_probability, 1e-12, 1 - 1e-12)
     odds_variant = prior_variant_probability / (1.0 - prior_variant_probability)
-    posterior_probability = odds_variant / (bayes_factor + odds_variant)
+    artifact_posterior = bayes_factor / (bayes_factor + odds_variant)
 
     return Stats(
         case_counts=case_counts,
@@ -159,7 +161,7 @@ def compute_stats(
         expected_case_counts=expected_case_counts,
         bayes_factor=bayes_factor,
         log_bayes_factor_artifact_vs_variant=log_bayes_factor,
-        posterior_probability=posterior_probability,
+        artifact_posterior=artifact_posterior,
         dispersion_rho=rho,
         pseudocount=pseudocount,
     )

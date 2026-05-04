@@ -30,7 +30,7 @@ def test_compute_stats_returns_typed_background_and_score() -> None:
     assert stats.background_rate_by_channel["alt_forward"] == 0.05
     assert stats.expected_case_counts["alt_forward"] == 0.5
     assert stats.bayes_factor >= 0.0
-    assert 0.0 <= stats.posterior_probability <= 1.0
+    assert 0.0 <= stats.artifact_posterior <= 1.0
     assert stats.dispersion_rho == 1e-4
     assert stats.pseudocount == 0.5
 
@@ -62,12 +62,12 @@ def test_compute_stats_is_stable_for_zero_depth() -> None:
     }
     assert stats.bayes_factor == 1.0
     assert stats.log_bayes_factor_artifact_vs_variant == 0.0
-    assert stats.posterior_probability == 0.5
+    assert stats.artifact_posterior == 0.5
     assert stats.dispersion_rho == 1e-4
     assert stats.pseudocount == 0.5
 
 
-def test_compute_stats_artifact_probability_decreases_with_stronger_signal() -> None:
+def test_compute_stats_null_posterior_decreases_with_stronger_signal() -> None:
     normal_evidence = AggregatedEvidence(
         alt_forward=1,
         alt_reverse=1,
@@ -101,4 +101,4 @@ def test_compute_stats_artifact_probability_decreases_with_stronger_signal() -> 
     stronger_stats = compute_stats(stronger_case, normal_evidence)
 
     assert stronger_stats.bayes_factor < weaker_stats.bayes_factor
-    assert stronger_stats.posterior_probability > weaker_stats.posterior_probability
+    assert stronger_stats.artifact_posterior < weaker_stats.artifact_posterior
