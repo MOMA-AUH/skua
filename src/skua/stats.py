@@ -225,6 +225,10 @@ def compute_stats(
         nu_fw = _bound((X_fw + pseudocount) / (N_fw + 2.0 * pseudocount), mu_min, mu_max)
         nu_bw = _bound((X_bw + pseudocount) / (N_bw + 2.0 * pseudocount), mu_min, mu_max)
 
+        # Shearwater floor: prevent variant-rate mu from dropping below
+        # strand-specific null-rate estimates.
+        mu = max(mu, nu0_fw, nu0_bw)
+
         mu_scaled = mu * disp
         nu0_fw_scaled = nu0_fw * disp
         nu0_bw_scaled = nu0_bw * disp
