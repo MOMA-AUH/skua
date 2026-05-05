@@ -240,13 +240,54 @@ def format_verification_results_with_normals(
     """Convert PON verification results to JSON/tabular-ready row dictionaries."""
     rows: list[dict[str, Any]] = []
     for variant, pon_result in results:
+        truncate = 0.1
+        epsilon = 2.220446049250313e-16
         evidence = pon_result["case_evidence"]
-        normal_aggregate_evidence = pon_result["normal_aggregate_evidence"]
+        per_sample_evidences = pon_result["normal_evidences"]
+
+        normal_samples_included = [
+            sample
+            for sample in per_sample_evidences
+            if (
+                (
+                    sample.alt_forward
+                    + sample.alt_reverse
+                    + epsilon
+                )
+                /
+                (
+                    sample.alt_forward
+                    + sample.alt_reverse
+                    + sample.non_alt_forward
+                    + sample.non_alt_reverse
+                    + epsilon
+                )
+            )
+            < truncate
+        ]
+
+        normal_unusable_by_reason: dict[Any, int] = {}
+        for sample in normal_samples_included:
+            for reason, count in sample.unusable_by_reason.items():
+                normal_unusable_by_reason[reason] = normal_unusable_by_reason.get(reason, 0) + count
+
+        normal_output_evidence = AggregatedEvidence(
+            alt_forward=sum(sample.alt_forward for sample in normal_samples_included),
+            alt_reverse=sum(sample.alt_reverse for sample in normal_samples_included),
+            non_alt_forward=sum(sample.non_alt_forward for sample in normal_samples_included),
+            non_alt_reverse=sum(sample.non_alt_reverse for sample in normal_samples_included),
+            usable=sum(sample.usable for sample in normal_samples_included),
+            unusable=sum(sample.unusable for sample in normal_samples_included),
+            unusable_by_reason=normal_unusable_by_reason,
+        )
+
         stats = compute_stats(
             evidence,
-            normal_aggregate_evidence,
-            per_sample_evidences=pon_result["normal_evidences"],
+            normal_output_evidence,
+            per_sample_evidences=per_sample_evidences,
+            truncate=truncate,
         )
+        normal_samples_used = len(normal_samples_included)
         rows.append(
             {
                 "contig": variant.contig,
@@ -255,6 +296,8 @@ def format_verification_results_with_normals(
                 "alt": variant.alt,
                 "bayes_factor": stats.bayes_factor,
                 "artifact_posterior": stats.artifact_posterior,
+                "rho": stats.dispersion_rho,
+                "normal_samples_used": normal_samples_used,
                 "case": {
                     "alt_forward": evidence.alt_forward,
                     "alt_reverse": evidence.alt_reverse,
@@ -268,15 +311,15 @@ def format_verification_results_with_normals(
                     },
                 },
                 "normal": {
-                    "alt_forward": normal_aggregate_evidence.alt_forward,
-                    "alt_reverse": normal_aggregate_evidence.alt_reverse,
-                    "non_alt_forward": normal_aggregate_evidence.non_alt_forward,
-                    "non_alt_reverse": normal_aggregate_evidence.non_alt_reverse,
-                    "usable": normal_aggregate_evidence.usable,
-                    "unusable": normal_aggregate_evidence.unusable,
+                    "alt_forward": normal_output_evidence.alt_forward,
+                    "alt_reverse": normal_output_evidence.alt_reverse,
+                    "non_alt_forward": normal_output_evidence.non_alt_forward,
+                    "non_alt_reverse": normal_output_evidence.non_alt_reverse,
+                    "usable": normal_output_evidence.usable,
+                    "unusable": normal_output_evidence.unusable,
                     "unusable_by_reason": {
                         reason.value: count
-                        for reason, count in normal_aggregate_evidence.unusable_by_reason.items()
+                        for reason, count in normal_output_evidence.unusable_by_reason.items()
                     },
                 },
             }

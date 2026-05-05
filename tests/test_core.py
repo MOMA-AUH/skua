@@ -447,14 +447,78 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     assert result[0]["case"]["unusable_by_reason"] == {}
     assert result[0]["bayes_factor"] >= 0.0
     assert 0.0 <= result[0]["artifact_posterior"] <= 1.0
+    assert result[0]["rho"] == 1e-4
+    assert result[0]["normal_samples_used"] == 1
     assert set(
         key
         for key in result[0].keys()
-        if key in {"bayes_factor", "artifact_posterior"}
+        if key in {"bayes_factor", "artifact_posterior", "rho", "normal_samples_used"}
     ) == {
         "bayes_factor",
         "artifact_posterior",
+        "rho",
+        "normal_samples_used",
     }
     assert "stats" not in result[0]
+
+
+def test_format_verification_results_with_normals_excludes_truncated_normals() -> None:
+    from skua.core import format_verification_results_with_normals
+
+    variant = Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")
+    case_evidence = AggregatedEvidence(
+        alt_forward=2,
+        alt_reverse=0,
+        non_alt_forward=8,
+        non_alt_reverse=0,
+        usable=10,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    low_background = AggregatedEvidence(
+        alt_forward=1,
+        alt_reverse=0,
+        non_alt_forward=99,
+        non_alt_reverse=0,
+        usable=100,
+        unusable=0,
+        unusable_by_reason={},
+    )
+    high_background_outlier = AggregatedEvidence(
+        alt_forward=20,
+        alt_reverse=0,
+        non_alt_forward=80,
+        non_alt_reverse=0,
+        usable=100,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+    rows = format_verification_results_with_normals(
+        [
+            (
+                variant,
+                {
+                    "case_evidence": case_evidence,
+                    "normal_evidences": [low_background, high_background_outlier],
+                    "normal_aggregate_evidence": AggregatedEvidence(
+                        alt_forward=21,
+                        alt_reverse=0,
+                        non_alt_forward=179,
+                        non_alt_reverse=0,
+                        usable=200,
+                        unusable=0,
+                        unusable_by_reason={},
+                    ),
+                },
+            )
+        ]
+    )
+
+    assert rows[0]["normal_samples_used"] == 1
+    assert rows[0]["normal"]["alt_forward"] == 1
+    assert rows[0]["normal"]["non_alt_forward"] == 99
+    assert rows[0]["normal"]["usable"] == 100
 
 
