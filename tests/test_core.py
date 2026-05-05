@@ -445,11 +445,16 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     assert result[0]["case"]["usable"] == 1
     assert result[0]["case"]["unusable"] == 0
     assert result[0]["case"]["unusable_by_reason"] == {}
-    assert result[0]["stats"]["bayes_factor"] >= 0.0
-    assert 0.0 <= result[0]["stats"]["artifact_posterior"] <= 1.0
-    assert set(result[0]["stats"].keys()) == {
+    assert result[0]["bayes_factor"] >= 0.0
+    assert 0.0 <= result[0]["artifact_posterior"] <= 1.0
+    assert set(
+        key
+        for key in result[0].keys()
+        if key in {"bayes_factor", "artifact_posterior"}
+    ) == {
         "bayes_factor",
         "artifact_posterior",
     }
+    assert "stats" not in result[0]
 
 

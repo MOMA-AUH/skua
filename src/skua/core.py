@@ -253,6 +253,8 @@ def format_verification_results_with_normals(
                 "pos1": variant.ref_pos0 + 1,
                 "ref": variant.ref,
                 "alt": variant.alt,
+                "bayes_factor": stats.bayes_factor,
+                "artifact_posterior": stats.artifact_posterior,
                 "case": {
                     "alt_forward": evidence.alt_forward,
                     "alt_reverse": evidence.alt_reverse,
@@ -277,7 +279,6 @@ def format_verification_results_with_normals(
                         for reason, count in normal_aggregate_evidence.unusable_by_reason.items()
                     },
                 },
-                "stats": stats.to_dict(),
             }
         )
     return rows
