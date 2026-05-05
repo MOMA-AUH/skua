@@ -118,6 +118,86 @@ def _make_normal(alt_fw: int, alt_bw: int, depth: int) -> AggregatedEvidence:
     )
 
 
+def _estimate_rho_reference(
+    per_sample_evidences: list[AggregatedEvidence],
+    *,
+    truncate: float = 0.1,
+    rho_min: float = 1e-4,
+    rho_max: float = 0.1,
+    pseudo: float = sys.float_info.epsilon,
+) -> float:
+    ncol = 2
+    total_depth_by_sample = [
+        sample.alt_forward
+        + sample.alt_reverse
+        + sample.non_alt_forward
+        + sample.non_alt_reverse
+        for sample in per_sample_evidences
+    ]
+    x_by_channel = [
+        [sample.alt_forward + sample.alt_reverse for sample in per_sample_evidences],
+        [sample.non_alt_forward + sample.non_alt_reverse for sample in per_sample_evidences],
+    ]
+    total_depth_all = sum(total_depth_by_sample)
+
+    rho_by_channel: list[float] = []
+    for channel_index in range(ncol):
+        mu_values = [
+            (x_by_channel[channel_index][sample_index] + pseudo)
+            / (total_depth_by_sample[sample_index] + ncol * pseudo)
+            for sample_index in range(len(per_sample_evidences))
+        ]
+        included = [mu_value < truncate for mu_value in mu_values]
+        included_count = sum(included)
+        if included_count < 2:
+            rho_by_channel.append(rho_min)
+            continue
+
+        xix = sum(
+            x_by_channel[channel_index][sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index]
+        )
+        nu = (xix + pseudo) / (total_depth_all + ncol * pseudo)
+
+        valid_depths = [
+            total_depth_by_sample[sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index] and total_depth_by_sample[sample_index] > 0
+        ]
+        valid_mu = [
+            mu_values[sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index] and total_depth_by_sample[sample_index] > 0
+        ]
+        if not valid_depths:
+            rho_by_channel.append(rho_min)
+            continue
+
+        s2 = (
+            included_count
+            * sum(
+                valid_depths[value_index] * (valid_mu[value_index] - nu) ** 2
+                for value_index in range(len(valid_depths))
+            )
+            / ((included_count - 1) * sum(valid_depths))
+        )
+        sum_inv_nix = sum(1.0 / depth for depth in valid_depths)
+        denom = included_count - sum_inv_nix
+        if denom <= 0 or nu <= 0.0 or nu >= 1.0:
+            rho_by_channel.append(rho_min)
+            continue
+
+        rho_hat = (included_count * (s2 / nu / (1.0 - nu)) - sum_inv_nix) / denom
+        if not sys.float_info.max > abs(rho_hat) or rho_hat != rho_hat:
+            rho_by_channel.append(rho_min)
+            continue
+
+        rho_by_channel.append(min(max(min(max(rho_hat, 0.0), 1.0), rho_min), rho_max))
+
+    return rho_by_channel[0]
+
+
 def test_estimate_rho_empty_returns_rho_min() -> None:
     assert estimate_rho([]) == 1e-4
 
@@ -145,6 +225,18 @@ def test_estimate_rho_result_is_within_bounds() -> None:
     samples = [_make_normal(i, i, 500) for i in range(1, 21)]
     rho = estimate_rho(samples)
     assert 1e-4 <= rho <= 0.1
+
+
+def test_estimate_rho_matches_reference_two_channel_formula() -> None:
+    samples = [
+        _make_normal(1, 0, 120),
+        _make_normal(2, 1, 140),
+        _make_normal(3, 0, 160),
+        _make_normal(4, 1, 180),
+        _make_normal(12, 8, 150),
+    ]
+
+    assert estimate_rho(samples) == _estimate_rho_reference(samples)
 
 
 def test_compute_stats_uses_estimated_rho_from_per_sample_evidences() -> None:

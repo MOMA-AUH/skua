@@ -61,63 +61,90 @@ def estimate_rho(
     """Estimate beta-binomial overdispersion (rho) from per-sample PON evidence.
 
     Implements the method-of-moments estimator from Shearwater's estimateRho(),
-    applied to the combined (forward + reverse) alt channel across PON samples.
-    Returns rho bounded to [rho_min, rho_max].
+    using a two-channel tensor-like representation of the available evidence:
+    alt and non-alt, each combined across strands for rho estimation.
+    Returns the alt-channel rho bounded to [rho_min, rho_max].
     """
     if len(per_sample_evidences) < 2:
         return rho_min
 
-    # Per-sample combined alt counts and total depths (combined across strands)
-    x_vals = [s.alt_forward + s.alt_reverse for s in per_sample_evidences]
-    n_vals = [
-        s.alt_forward + s.alt_reverse + s.non_alt_forward + s.non_alt_reverse
-        for s in per_sample_evidences
+    ncol = 2
+    total_depth_by_sample = [
+        sample.alt_forward
+        + sample.alt_reverse
+        + sample.non_alt_forward
+        + sample.non_alt_reverse
+        for sample in per_sample_evidences
     ]
-    S = len(per_sample_evidences)
-    total_n = sum(n_vals)
+    x_by_channel = [
+        [sample.alt_forward + sample.alt_reverse for sample in per_sample_evidences],
+        [sample.non_alt_forward + sample.non_alt_reverse for sample in per_sample_evidences],
+    ]
+    total_depth_all = sum(total_depth_by_sample)
+    total_by_channel = [sum(channel_counts) for channel_counts in x_by_channel]
 
-    # Per-sample rates with pseudocount
-    mu_vals = [(x_vals[i] + pseudo) / (n_vals[i] + pseudo) for i in range(S)]
+    rho_by_channel: list[float] = []
+    for channel_index in range(ncol):
+        mu_values = [
+            (x_by_channel[channel_index][sample_index] + pseudo)
+            / (total_depth_by_sample[sample_index] + ncol * pseudo)
+            for sample_index in range(len(per_sample_evidences))
+        ]
+        included = [mu_value < truncate for mu_value in mu_values]
+        included_count = sum(included)
+        if included_count < 2:
+            rho_by_channel.append(rho_min)
+            continue
 
-    # Truncation filter: exclude samples with high background rate
-    ix = [mu_vals[i] < truncate for i in range(S)]
-    N = sum(ix)
+        xix = sum(
+            x_by_channel[channel_index][sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index]
+        )
+        nu = (xix + pseudo) / (total_depth_all + ncol * pseudo)
 
-    if N < 2:
-        return rho_min
+        valid_depths = [
+            total_depth_by_sample[sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index] and total_depth_by_sample[sample_index] > 0
+        ]
+        valid_mu = [
+            mu_values[sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index] and total_depth_by_sample[sample_index] > 0
+        ]
+        if included_count < 2 or not valid_depths:
+            rho_by_channel.append(rho_min)
+            continue
 
-    # Pooled background rate (denominator uses unfiltered total depth, matching R)
-    Xix = sum(x_vals[i] for i in range(S) if ix[i])
-    nu = (Xix + pseudo) / (total_n + pseudo)
+        sum_valid_depths = sum(valid_depths)
+        s2 = (
+            included_count
+            * sum(
+                valid_depths[value_index] * (valid_mu[value_index] - nu) ** 2
+                for value_index in range(len(valid_depths))
+            )
+            / ((included_count - 1) * sum_valid_depths)
+        )
 
-    # Weighted sample variance (weights = per-sample total depth for included samples)
-    n_ix = [n_vals[i] for i in range(S) if ix[i]]
-    mu_ix = [mu_vals[i] for i in range(S) if ix[i]]
-    sum_nix = sum(n_ix)
+        sum_inv_nix = sum(1.0 / depth for depth in valid_depths)
+        denom = included_count - sum_inv_nix
+        if denom <= 0 or nu <= 0.0 or nu >= 1.0:
+            rho_by_channel.append(rho_min)
+            continue
 
-    if sum_nix == 0 or N < 2:
-        return rho_min
+        rho_hat = (
+            included_count * (s2 / nu / (1.0 - nu)) - sum_inv_nix
+        ) / denom
+        if not math.isfinite(rho_hat):
+            rho_by_channel.append(rho_min)
+            continue
 
-    s2 = (
-        N
-        * sum(n_ix[k] * (mu_ix[k] - nu) ** 2 for k in range(N))
-        / ((N - 1) * sum_nix)
-    )
+        rho_hat = _bound(rho_hat, 0.0, 1.0)
+        rho_hat = _bound(rho_hat, rho_min, rho_max)
+        rho_by_channel.append(rho_hat)
 
-    # Method-of-moments beta-binomial rho estimate
-    sum_inv_nix = sum(1.0 / n_ix[k] for k in range(N) if n_ix[k] > 0)
-    denom = N - sum_inv_nix
-    if denom <= 0:
-        return rho_min
-
-    rho_hat = (N * (s2 / (nu * (1.0 - nu))) - sum_inv_nix) / denom
-
-    # Bound to [0,1] then [rho_min, rho_max]; fall back to rho_min on NaN
-    if not math.isfinite(rho_hat):
-        return rho_min
-    rho_hat = _bound(rho_hat, 0.0, 1.0)
-    rho_hat = _bound(rho_hat, rho_min, rho_max)
-    return rho_hat
+    return rho_by_channel[0]
 
 
 def compute_stats(
