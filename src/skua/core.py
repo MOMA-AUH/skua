@@ -1,16 +1,252 @@
 """Core public API for skua."""
 
+import gzip
 import json
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any
 from typing import Callable
 from typing import Iterable
 from typing import Iterator
 
+import pysam
+
 from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
 from .variants import Variant, read_vcf_snv_file
+
+
+CASE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
+    ("SKUA_ALT_FWD", "Case ALT-supporting forward reads"),
+    ("SKUA_ALT_REV", "Case ALT-supporting reverse reads"),
+    ("SKUA_NON_ALT_FWD", "Case non-ALT forward reads"),
+    ("SKUA_NON_ALT_REV", "Case non-ALT reverse reads"),
+    ("SKUA_USABLE", "Case usable reads at this locus"),
+    ("SKUA_UNUSABLE", "Case unusable reads at this locus"),
+)
+
+PON_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
+    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
+    ("SKUA_BAYES_FACTOR", "Float", "Bayes factor artifact-vs-variant"),
+)
+
+PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
+    ("SKUA_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
+    ("SKUA_PON_SAMPLE_COUNT", "Integer", "Number of PON samples included after truncation"),
+    ("SKUA_N_ALT_FWD", "Integer", "PON ALT-supporting forward reads after truncation"),
+    ("SKUA_N_ALT_REV", "Integer", "PON ALT-supporting reverse reads after truncation"),
+    ("SKUA_N_NON_ALT_FWD", "Integer", "PON non-ALT forward reads after truncation"),
+    ("SKUA_N_NON_ALT_REV", "Integer", "PON non-ALT reverse reads after truncation"),
+    ("SKUA_N_USABLE", "Integer", "PON usable reads after truncation"),
+    ("SKUA_N_UNUSABLE", "Integer", "PON unusable reads after truncation"),
+)
+
+
+def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> Any:
+    """Ensure SKUA FORMAT/INFO definitions exist on the active VCF header."""
+    annotated_header = header
+
+    for field_id, description in CASE_FORMAT_FIELD_DEFINITIONS:
+        if field_id not in annotated_header.formats:
+            annotated_header.add_line(
+                f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="{description}">'
+            )
+
+    if include_pon_info:
+        for field_id, field_type, description in PON_FORMAT_FIELD_DEFINITIONS:
+            if field_id not in annotated_header.formats:
+                annotated_header.add_line(
+                    f'##FORMAT=<ID={field_id},Number=1,Type={field_type},Description="{description}">'
+                )
+
+        for field_id, field_type, description in PON_INFO_FIELD_DEFINITIONS:
+            if field_id not in annotated_header.info:
+                annotated_header.add_line(
+                    f'##INFO=<ID={field_id},Number=1,Type={field_type},Description="{description}">'
+                )
+
+    return annotated_header
+
+
+def _variant_from_vcf_record(record: Any) -> Variant | None:
+    """Build a SNV Variant from a pysam VCF record when supported, else None."""
+    if len(record.alts or ()) != 1:
+        return None
+
+    alt = record.alts[0]
+    if len(record.ref) != 1 or len(alt) != 1:
+        return None
+
+    try:
+        return Variant.from_vcf_fields(
+            contig=record.contig,
+            pos1=record.pos,
+            ref=record.ref,
+            alt=alt,
+        )
+    except ValueError:
+        return None
+
+
+def _annotate_case_format_fields(record: Any, evidence: AggregatedEvidence) -> None:
+    """Set case-count FORMAT annotations on all sample columns."""
+    for sample in record.samples.values():
+        sample["SKUA_ALT_FWD"] = evidence.alt_forward
+        sample["SKUA_ALT_REV"] = evidence.alt_reverse
+        sample["SKUA_NON_ALT_FWD"] = evidence.non_alt_forward
+        sample["SKUA_NON_ALT_REV"] = evidence.non_alt_reverse
+        sample["SKUA_USABLE"] = evidence.usable
+        sample["SKUA_UNUSABLE"] = evidence.unusable
+
+
+def _annotate_pon_sample_format_fields(record: Any, *, artifact_posterior: float, bayes_factor: float) -> None:
+    """Set PON model output FORMAT annotations on all sample columns."""
+    for sample in record.samples.values():
+        sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
+        sample["SKUA_BAYES_FACTOR"] = float(bayes_factor)
+
+
+def _render_annotated_vcf_payload(output_path: Path) -> str:
+    """Read and return VCF text written to disk."""
+    if output_path.suffix == ".gz":
+        with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+            return handle.read()
+    return output_path.read_text(encoding="utf-8")
+
+
+def _vcf_write_mode(output_path: Path) -> str:
+    """Return the pysam VariantFile write mode for VCF output path."""
+    if output_path.suffix == ".gz":
+        return "wz"
+    return "w"
+
+
+def verify_snv_vcf_to_annotated_vcf(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> str:
+    """Annotate an input VCF with case-count FORMAT fields."""
+    destination_path: Path
+    created_temp = False
+    if output_path is None:
+        tmp = tempfile.NamedTemporaryFile(prefix="skua_", suffix=".vcf", delete=False)
+        tmp.close()
+        destination_path = Path(tmp.name)
+        created_temp = True
+    else:
+        destination_path = Path(output_path)
+
+    try:
+        with pysam.VariantFile(str(vcf_path)) as source_vcf:
+            header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=False)
+            with pysam.VariantFile(
+                str(destination_path),
+                _vcf_write_mode(destination_path),
+                header=header,
+            ) as out_vcf:
+                for record in source_vcf:
+                    variant = _variant_from_vcf_record(record)
+                    if variant is not None:
+                        evidence = verify_snv_variant(
+                            alignment_file,
+                            variant,
+                            min_baseq=min_baseq,
+                            min_mapq=min_mapq,
+                        )
+                        _annotate_case_format_fields(record, evidence)
+                    out_vcf.write(record)
+
+        return _render_annotated_vcf_payload(destination_path)
+    finally:
+        if created_temp and destination_path.exists():
+            destination_path.unlink()
+
+
+def verify_snv_vcf_to_annotated_vcf_with_normals(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    normal_alignments: list[Any] | None = None,
+    output_path: str | Path | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    truncate: float = DEFAULT_TRUNCATE,
+    pseudocount: float = sys.float_info.epsilon,
+    prior_variant_probability: float = 0.5,
+) -> str:
+    """Annotate an input VCF with case FORMAT and PON INFO fields."""
+    if normal_alignments is None:
+        normal_alignments = []
+
+    destination_path: Path
+    created_temp = False
+    if output_path is None:
+        tmp = tempfile.NamedTemporaryFile(prefix="skua_", suffix=".vcf", delete=False)
+        tmp.close()
+        destination_path = Path(tmp.name)
+        created_temp = True
+    else:
+        destination_path = Path(output_path)
+
+    try:
+        with pysam.VariantFile(str(vcf_path)) as source_vcf:
+            header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=True)
+            with pysam.VariantFile(
+                str(destination_path),
+                _vcf_write_mode(destination_path),
+                header=header,
+            ) as out_vcf:
+                for record in source_vcf:
+                    variant = _variant_from_vcf_record(record)
+                    if variant is not None:
+                        pon_result = verify_snv_variant_with_normals(
+                            alignment_file,
+                            variant,
+                            normal_alignments=normal_alignments,
+                            min_baseq=min_baseq,
+                            min_mapq=min_mapq,
+                        )
+                        case_evidence = pon_result["case_evidence"]
+                        normal_samples_included = truncated_normal_evidences(
+                            pon_result["normal_evidences"],
+                            truncate=truncate,
+                        )
+                        normal_output_evidence = aggregate_evidence(normal_samples_included)
+                        stats = compute_stats(
+                            case_evidence,
+                            normal_output_evidence,
+                            per_sample_evidences=pon_result["normal_evidences"],
+                            truncate=truncate,
+                            pseudocount=pseudocount,
+                            prior_variant_probability=prior_variant_probability,
+                        )
+
+                        _annotate_case_format_fields(record, case_evidence)
+                        _annotate_pon_sample_format_fields(
+                            record,
+                            artifact_posterior=stats.artifact_posterior,
+                            bayes_factor=stats.bayes_factor,
+                        )
+                        record.info["SKUA_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
+                        record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
+                        record.info["SKUA_N_ALT_FWD"] = normal_output_evidence.alt_forward
+                        record.info["SKUA_N_ALT_REV"] = normal_output_evidence.alt_reverse
+                        record.info["SKUA_N_NON_ALT_FWD"] = normal_output_evidence.non_alt_forward
+                        record.info["SKUA_N_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
+                        record.info["SKUA_N_USABLE"] = normal_output_evidence.usable
+                        record.info["SKUA_N_UNUSABLE"] = normal_output_evidence.unusable
+
+                    out_vcf.write(record)
+
+        return _render_annotated_vcf_payload(destination_path)
+    finally:
+        if created_temp and destination_path.exists():
+            destination_path.unlink()
 
 
 def verify_snv_variant(

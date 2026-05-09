@@ -1,8 +1,12 @@
 import json
 
+import pytest
+
 from skua.core import (
     format_verification_results,
     render_verification_results_json,
+    verify_snv_vcf_to_annotated_vcf,
+    verify_snv_vcf_to_annotated_vcf_with_normals,
     verify_snv_vcf_to_json,
     verify_snv_variant,
     verify_snv_variant_with_normals,
@@ -325,6 +329,176 @@ def test_verify_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> Non
     ]
     assert json.loads(payload) == expected_rows
     assert json.loads(output_path.read_text(encoding="utf-8")) == expected_rows
+
+
+def test_verify_snv_vcf_to_annotated_vcf_writes_case_format_fields(tmp_path) -> None:
+    import pysam
+
+    reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=True,
+            query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    alignment_file = FakeAlignmentFile(reads)
+
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    payload = verify_snv_vcf_to_annotated_vcf(
+        alignment_file,
+        vcf_path,
+        output_path=output_path,
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert "SKUA_ALT_FWD" in payload
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+        assert sample["SKUA_ALT_REV"] == 0
+        assert sample["SKUA_NON_ALT_FWD"] == 0
+        assert sample["SKUA_NON_ALT_REV"] == 1
+        assert sample["SKUA_USABLE"] == 2
+        assert sample["SKUA_UNUSABLE"] == 0
+
+
+def test_verify_snv_vcf_to_annotated_vcf_supports_bgzipped_output(tmp_path) -> None:
+    import pysam
+
+    reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    alignment_file = FakeAlignmentFile(reads)
+
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf.gz"
+
+    payload = verify_snv_vcf_to_annotated_vcf(
+        alignment_file,
+        vcf_path,
+        output_path=output_path,
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert output_path.read_bytes()[:2] == b"\x1f\x8b"
+    assert "#CHROM" in payload
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+
+
+def test_verify_snv_vcf_to_annotated_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
+    import pysam
+
+    case_reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    case_alignment = FakeAlignmentFile(case_reads)
+
+    normal_reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    normal_alignment = FakeAlignmentFile(normal_reads)
+
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated_pon.vcf"
+
+    payload = verify_snv_vcf_to_annotated_vcf_with_normals(
+        case_alignment,
+        vcf_path,
+        normal_alignments=[normal_alignment],
+        output_path=output_path,
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert "SKUA_ARTIFACT_POSTERIOR" in payload
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+        assert 0.0 <= sample["SKUA_ARTIFACT_POSTERIOR"] <= 1.0
+        assert sample["SKUA_BAYES_FACTOR"] >= 0.0
+        assert record.info["SKUA_PON_SAMPLE_COUNT"] == 1
+        assert record.info["SKUA_N_ALT_FWD"] == 0
+        assert record.info["SKUA_N_ALT_REV"] == 0
+        assert record.info["SKUA_N_NON_ALT_FWD"] == 1
+        assert record.info["SKUA_N_NON_ALT_REV"] == 0
+        assert record.info["SKUA_N_USABLE"] == 1
+        assert record.info["SKUA_N_UNUSABLE"] == 0
+        assert record.info["SKUA_DISPERSION_FACTOR"] == pytest.approx(1e-4)
 
 
 def test_verify_snv_variant_with_normals_returns_case_and_normal_evidence() -> None:

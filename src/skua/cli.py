@@ -6,6 +6,8 @@ from pathlib import Path
 import pysam
 
 from .core import (
+    verify_snv_vcf_to_annotated_vcf,
+    verify_snv_vcf_to_annotated_vcf_with_normals,
     verify_snv_vcf_to_json,
     verify_snv_vcf_to_json_with_normals,
 )
@@ -44,7 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--vcf", required=True, help="Input VCF path (required)")
     verify_parser.add_argument("--alignment", required=True, help="Input BAM/CRAM path (required)")
     verify_parser.add_argument("--reference", help="Reference FASTA path (required for CRAM)")
-    verify_parser.add_argument("--output", help="Optional output JSON path")
+    verify_parser.add_argument("--output", help="Optional output path")
+    verify_parser.add_argument(
+        "--output-format",
+        choices=["json", "vcf"],
+        default="json",
+        help="Output payload format",
+    )
     verify_parser.add_argument(
         "--normal-list",
         help="Path to file listing normal sample BAM/CRAM paths, one per line",
@@ -114,23 +122,43 @@ def main(argv: list[str] | None = None) -> int:
                     }
                     if args.pseudocount is not None:
                         pon_kwargs["pseudocount"] = args.pseudocount
-                    payload = verify_snv_vcf_to_json_with_normals(
-                        alignment_file,
-                        Path(args.vcf),
-                        normal_alignments=normal_alignments,
-                        output_path=args.output,
-                        min_baseq=args.min_baseq,
-                        min_mapq=args.min_mapq,
-                        **pon_kwargs,
-                    )
+                    if args.output_format == "vcf":
+                        payload = verify_snv_vcf_to_annotated_vcf_with_normals(
+                            alignment_file,
+                            Path(args.vcf),
+                            normal_alignments=normal_alignments,
+                            output_path=args.output,
+                            min_baseq=args.min_baseq,
+                            min_mapq=args.min_mapq,
+                            **pon_kwargs,
+                        )
+                    else:
+                        payload = verify_snv_vcf_to_json_with_normals(
+                            alignment_file,
+                            Path(args.vcf),
+                            normal_alignments=normal_alignments,
+                            output_path=args.output,
+                            min_baseq=args.min_baseq,
+                            min_mapq=args.min_mapq,
+                            **pon_kwargs,
+                        )
                 else:
-                    payload = verify_snv_vcf_to_json(
-                        alignment_file,
-                        Path(args.vcf),
-                        output_path=args.output,
-                        min_baseq=args.min_baseq,
-                        min_mapq=args.min_mapq,
-                    )
+                    if args.output_format == "vcf":
+                        payload = verify_snv_vcf_to_annotated_vcf(
+                            alignment_file,
+                            Path(args.vcf),
+                            output_path=args.output,
+                            min_baseq=args.min_baseq,
+                            min_mapq=args.min_mapq,
+                        )
+                    else:
+                        payload = verify_snv_vcf_to_json(
+                            alignment_file,
+                            Path(args.vcf),
+                            output_path=args.output,
+                            min_baseq=args.min_baseq,
+                            min_mapq=args.min_mapq,
+                        )
         finally:
             for normal_alignment in normal_alignments:
                 normal_alignment.close()
