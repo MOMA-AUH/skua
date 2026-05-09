@@ -32,7 +32,6 @@ PON_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
-    ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
     ("SKUA_PON_SAMPLE_COUNT", "Integer", "Number of PON samples included after truncation"),
     ("SKUA_PON_ALT_FWD", "Integer", "PON ALT-supporting forward reads after truncation"),
     ("SKUA_PON_ALT_REV", "Integer", "PON ALT-supporting reverse reads after truncation"),
@@ -40,6 +39,7 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_PON_NON_ALT_REV", "Integer", "PON non-ALT reverse reads after truncation"),
     ("SKUA_PON_USABLE", "Integer", "PON usable reads after truncation"),
     ("SKUA_PON_UNUSABLE", "Integer", "PON unusable reads after truncation"),
+    ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
 )
 
 
@@ -232,7 +232,6 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
                             artifact_posterior=stats.artifact_posterior,
                             bayes_factor=stats.bayes_factor,
                         )
-                        record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
                         record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
                         record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
                         record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
@@ -240,6 +239,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
                         record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
                         record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
                         record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
+                        record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
 
                     out_vcf.write(record)
 
