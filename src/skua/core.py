@@ -14,7 +14,7 @@ import pysam
 
 from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
-from .variants import Variant, read_vcf_snv_file
+from .variants import Variant, read_vcf_variant_file
 
 
 CASE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -70,14 +70,11 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
 
 
 def _variant_from_vcf_record(record: Any) -> Variant | None:
-    """Build a SNV Variant from a pysam VCF record when supported, else None."""
+    """Build a Variant from a pysam VCF record when supported, else None."""
     if len(record.alts or ()) != 1:
         return None
 
     alt = record.alts[0]
-    if len(record.ref) != 1 or len(alt) != 1:
-        return None
-
     try:
         return Variant.from_vcf_fields(
             contig=record.contig,
@@ -130,7 +127,7 @@ def verify_snv_vcf_to_annotated_vcf(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Annotate an input VCF with case-count FORMAT fields."""
+    """Annotate an input VCF with case-count FORMAT fields for variants."""
     destination_path: Path
     created_temp = False
     if output_path is None:
@@ -179,7 +176,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> str:
-    """Annotate an input VCF with case FORMAT and PON INFO fields."""
+    """Annotate an input VCF with case FORMAT and PON INFO fields for variants."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -256,7 +253,7 @@ def verify_snv_variant(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
-    """Collect strand-aware evidence for one SNV variant from one alignment."""
+    """Collect strand-aware evidence for one variant from one alignment."""
     return collect_snv_evidence_from_alignment(
         alignment_file,
         contig=variant.contig,
@@ -276,7 +273,7 @@ def verify_snv_variant_with_normals(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> dict[str, Any]:
-    """Collect case and normal evidence for one SNV variant."""
+    """Collect case and normal evidence for one variant."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -335,8 +332,8 @@ def verify_snv_variants_from_vcf(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
-    """Yield per-variant evidence for SNV records from a VCF file."""
-    for variant in read_vcf_snv_file(vcf_path):
+    """Yield per-variant evidence for variant records from a VCF file."""
+    for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
             verify_snv_variant(
@@ -460,7 +457,7 @@ def verify_snv_variants_from_vcf_with_normals(
     if normal_alignments is None:
         normal_alignments = []
 
-    for variant in read_vcf_snv_file(vcf_path):
+    for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
             verify_snv_variant_with_normals(

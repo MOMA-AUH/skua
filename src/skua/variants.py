@@ -2,32 +2,55 @@
 
 import gzip
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Iterator
 
 
+class VariantKind(str, Enum):
+    """Supported simple VCF allele classes."""
+
+    SUBSTITUTION = "substitution"
+    INSERTION = "insertion"
+    DELETION = "deletion"
+
+
 @dataclass(frozen=True)
 class Variant:
-    """Minimal SNV variant model using 0-based reference position."""
+    """Minimal simple-variant model using 0-based reference position."""
 
     contig: str
     ref_pos0: int
     ref: str
     alt: str
 
+    @property
+    def kind(self) -> VariantKind:
+        """Return the simple allele class for this variant."""
+        if len(self.ref) == len(self.alt):
+            return VariantKind.SUBSTITUTION
+        if len(self.ref) == 1 and len(self.alt) > 1:
+            return VariantKind.INSERTION
+        if len(self.ref) > 1 and len(self.alt) == 1:
+            return VariantKind.DELETION
+        raise ValueError("Only simple substitutions and simple indels are supported")
+
     @classmethod
     def from_vcf_fields(cls, *, contig: str, pos1: int, ref: str, alt: str) -> "Variant":
         """Build a Variant from basic VCF fields."""
         if pos1 < 1:
             raise ValueError("VCF POS must be >= 1")
-        if len(ref) != 1 or len(alt) != 1:
-            raise ValueError("SNV variants require single-base REF and ALT")
+        if not ref or not alt:
+            raise ValueError("VCF REF and ALT must be non-empty")
+
+        if len(ref) != len(alt) and not (len(ref) == 1 or len(alt) == 1):
+            raise ValueError("Only simple substitutions and simple indels are supported")
 
         return cls(contig=contig, ref_pos0=pos1 - 1, ref=ref, alt=alt)
 
 
-def parse_vcf_snv_line(line: str) -> Variant | None:
-    """Parse one VCF line and return a SNV Variant when applicable."""
+def parse_vcf_variant_line(line: str) -> Variant | None:
+    """Parse one VCF line and return a Variant when applicable."""
     line = line.strip()
     if not line or line.startswith("#"):
         return None
@@ -51,8 +74,8 @@ def parse_vcf_snv_line(line: str) -> Variant | None:
         return None
 
 
-def read_vcf_snv_file(path: str | Path) -> Iterator[Variant]:
-    """Yield SNV variants from a VCF file, skipping unsupported records."""
+def read_vcf_variant_file(path: str | Path) -> Iterator[Variant]:
+    """Yield variants from a VCF file, skipping unsupported records."""
     path_obj = Path(path)
     if path_obj.suffix == ".gz":
         handle_cm = gzip.open(path_obj, "rt", encoding="utf-8")
@@ -61,6 +84,6 @@ def read_vcf_snv_file(path: str | Path) -> Iterator[Variant]:
 
     with handle_cm as handle:
         for line in handle:
-            variant = parse_vcf_snv_line(line)
+            variant = parse_vcf_variant_line(line)
             if variant is not None:
                 yield variant

@@ -54,7 +54,7 @@ def test_verify_snv_variant_collects_evidence_for_single_variant() -> None:
     assert counts.unusable == 0
 
 
-def test_verify_snv_variants_from_vcf_processes_snv_records_only(tmp_path) -> None:
+def test_verify_snv_variants_from_vcf_processes_simple_records_only(tmp_path) -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -81,7 +81,8 @@ def test_verify_snv_variants_from_vcf_processes_snv_records_only(tmp_path) -> No
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
                 "chr1\t106\t.\tA\tT\t.\tPASS\t.",
                 "chr1\t200\t.\tA\tAT\t.\tPASS\t.",
-                "chr1\t300\t.\tC\tG,T\t.\tPASS\t.",
+                "chr1\t300\t.\tAT\tA\t.\tPASS\t.",
+                "chr1\t400\t.\tC\tG,T\t.\tPASS\t.",
             ]
         )
         + "\n"
@@ -96,16 +97,12 @@ def test_verify_snv_variants_from_vcf_processes_snv_records_only(tmp_path) -> No
         )
     )
 
-    assert len(results) == 1
-    variant, counts = results[0]
-    assert variant == Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")
-    assert alignment_file.fetch_calls == [("chr1", 105, 106)]
-    assert counts.alt_forward == 1
-    assert counts.alt_reverse == 0
-    assert counts.non_alt_forward == 0
-    assert counts.non_alt_reverse == 1
-    assert counts.usable == 2
-    assert counts.unusable == 0
+    assert [variant for variant, _counts in results] == [
+        Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
+        Variant(contig="chr1", ref_pos0=199, ref="A", alt="AT"),
+        Variant(contig="chr1", ref_pos0=299, ref="AT", alt="A"),
+    ]
+    assert alignment_file.fetch_calls == [("chr1", 105, 106), ("chr1", 199, 200), ("chr1", 299, 300)]
 
 
 def test_format_verification_results_returns_json_ready_records() -> None:
@@ -180,7 +177,6 @@ def test_verify_and_format_from_vcf_end_to_end(tmp_path) -> None:
                 "##fileformat=VCFv4.2",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
                 "chr1\t106\t.\tA\tT\t.\tPASS\t.",
-                "chr1\t200\t.\tA\tAT\t.\tPASS\t.",
             ]
         )
         + "\n"
@@ -293,7 +289,6 @@ def test_verify_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> Non
                 "##fileformat=VCFv4.2",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
                 "chr1\t106\t.\tA\tT\t.\tPASS\t.",
-                "chr1\t200\t.\tA\tAT\t.\tPASS\t.",
             ]
         )
         + "\n"
@@ -393,6 +388,65 @@ def test_verify_snv_vcf_to_annotated_vcf_writes_case_format_fields(tmp_path) -> 
         assert sample["SKUA_NON_ALT_REV"] == 1
         assert sample["SKUA_USABLE"] == 2
         assert sample["SKUA_UNUSABLE"] == 1
+
+
+def test_verify_snv_vcf_to_annotated_vcf_supports_simple_insertion(tmp_path) -> None:
+    import pysam
+
+    reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="ATAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=[
+                (0, 100),
+                (1, None),
+                (2, 101),
+                (3, 102),
+                (4, 103),
+                (5, 104),
+                (6, 105),
+                (7, 106),
+                (8, 107),
+                (9, 108),
+            ],
+        ),
+    ]
+    alignment_file = FakeAlignmentFile(reads)
+
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t101\t.\tA\tAT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated_insertion.vcf"
+
+    payload = verify_snv_vcf_to_annotated_vcf(
+        alignment_file,
+        vcf_path,
+        output_path=output_path,
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert "SKUA_ALT_FWD" in payload
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+        assert sample["SKUA_NON_ALT_FWD"] == 0
+        assert sample["SKUA_USABLE"] == 1
+        assert sample["SKUA_UNUSABLE"] == 0
 
 
 def test_verify_snv_vcf_to_annotated_vcf_supports_bgzipped_output(tmp_path) -> None:

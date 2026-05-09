@@ -1,4 +1,4 @@
-from skua.evidence import AlleleSupport, UnusableReason, classify_snv_read
+from skua.evidence import AlleleSupport, UnusableReason, classify_variant_read
 from tests.helpers import FakeRead, build_linear_pairs
 
 
@@ -11,7 +11,7 @@ def test_classify_alt_on_forward_strand() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -35,7 +35,7 @@ def test_classify_alt_on_reverse_strand() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -59,7 +59,7 @@ def test_classify_non_alt_read() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -94,7 +94,7 @@ def test_classify_unusable_for_deletion_at_locus() -> None:
         aligned_pairs=aligned_pairs,
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -117,7 +117,7 @@ def test_classify_unusable_for_low_base_quality() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -140,7 +140,7 @@ def test_classify_unusable_for_low_mapping_quality() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -163,7 +163,7 @@ def test_classify_unusable_for_invalid_base() -> None:
         aligned_pairs=build_linear_pairs(10, 100),
     )
 
-    call = classify_snv_read(
+    call = classify_variant_read(
         read,
         ref_pos0=105,
         ref_base="A",
@@ -175,3 +175,69 @@ def test_classify_unusable_for_invalid_base() -> None:
     assert call.support == AlleleSupport.UNUSABLE
     assert call.reason == UnusableReason.INVALID_BASE
     assert call.observed_base == "N"
+
+
+def test_classify_simple_insertion_as_alt() -> None:
+    read = FakeRead(
+        mapping_quality=60,
+        is_reverse=False,
+        query_sequence="ATAAAAAAAA",
+        query_qualities=[35] * 10,
+        aligned_pairs=[
+            (0, 100),
+            (1, None),
+            (2, 101),
+            (3, 102),
+            (4, 103),
+            (5, 104),
+            (6, 105),
+            (7, 106),
+            (8, 107),
+            (9, 108),
+        ],
+    )
+
+    call = classify_variant_read(
+        read,
+        ref_pos0=100,
+        ref_base="A",
+        alt_base="AT",
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert call.support == AlleleSupport.ALT
+    assert call.reason is None
+    assert call.observed_base == "T"
+
+
+def test_classify_simple_deletion_as_alt() -> None:
+    read = FakeRead(
+        mapping_quality=60,
+        is_reverse=False,
+        query_sequence="AAAAAAA",
+        query_qualities=[35] * 7,
+        aligned_pairs=[
+            (0, 100),
+            (None, 101),
+            (1, 102),
+            (2, 103),
+            (3, 104),
+            (4, 105),
+            (5, 106),
+            (6, 107),
+        ],
+    )
+
+    call = classify_variant_read(
+        read,
+        ref_pos0=100,
+        ref_base="AT",
+        alt_base="A",
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert call.support == AlleleSupport.ALT
+    assert call.reason is None
+    assert call.observed_base == "AT"

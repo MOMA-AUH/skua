@@ -42,7 +42,7 @@ def test_main_verify_prints_payload_without_output_path(monkeypatch, capsys) -> 
             "min_mapq": 20,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n\n"
+    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
 
 
 def test_main_verify_uses_output_path_and_does_not_print(monkeypatch, capsys) -> None:
@@ -157,7 +157,7 @@ def test_main_verify_accepts_alignment_path_for_cram(monkeypatch, capsys) -> Non
             "min_mapq": 20,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n\n"
+    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
 
 
 def test_main_verify_requires_reference_for_cram(capsys) -> None:
@@ -243,7 +243,7 @@ def test_main_verify_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_pat
             "prior_variant_probability": 0.5,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n\n"
+    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
 
 
 def test_main_verify_uses_annotated_vcf_function(monkeypatch, capsys) -> None:
@@ -296,7 +296,7 @@ def test_main_verify_uses_annotated_vcf_function(monkeypatch, capsys) -> None:
             "min_mapq": 20,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n\n"
+    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
 
 
 def test_main_verify_with_normal_uses_annotated_pon_function(
@@ -367,7 +367,7 @@ def test_main_verify_with_normal_uses_annotated_pon_function(
             "prior_variant_probability": 0.5,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n\n"
+    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
 
 
 def test_main_verify_rejects_removed_output_format_flag(capsys) -> None:

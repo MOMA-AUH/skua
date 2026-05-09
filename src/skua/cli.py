@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 normal_alignment.close()
 
         if args.output is None:
-            print(payload)
+            print(payload, end="")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
