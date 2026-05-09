@@ -275,7 +275,7 @@ def format_verification_results_with_normals(
                     "artifact_posterior": stats.artifact_posterior,
                     "bayes_factor": stats.bayes_factor,
                     "dispersion_factor": stats.dispersion_rho,
-                    "pon_size": normal_samples_used,
+                    "pon_sample_count": normal_samples_used,
                 },
                 "counts": {
                     "case": {

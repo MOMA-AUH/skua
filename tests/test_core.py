@@ -456,7 +456,7 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     assert 0.0 <= result[0]["stats"]["artifact_posterior"] <= 1.0
     assert result[0]["stats"]["bayes_factor"] >= 0.0
     assert result[0]["stats"]["dispersion_factor"] == 1e-4
-    assert result[0]["stats"]["pon_size"] == 1
+    assert result[0]["stats"]["pon_sample_count"] == 1
     assert list(result[0].keys()) == [
         "contig",
         "pos1",
@@ -469,7 +469,7 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
         "artifact_posterior",
         "bayes_factor",
         "dispersion_factor",
-        "pon_size",
+        "pon_sample_count",
     ]
 
 
@@ -527,7 +527,7 @@ def test_format_verification_results_with_normals_excludes_truncated_normals() -
         ]
     )
 
-    assert rows[0]["stats"]["pon_size"] == 1
+    assert rows[0]["stats"]["pon_sample_count"] == 1
     assert rows[0]["counts"]["normal"]["alt_forward"] == 1
     assert rows[0]["counts"]["normal"]["non_alt_forward"] == 99
     assert rows[0]["counts"]["normal"]["usable"] == 100
