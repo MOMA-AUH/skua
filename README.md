@@ -2,7 +2,7 @@
 
 Implementation of the [Shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads with support for SNV, MNV, and INDEL variants. The Shearwater authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to pick up prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
-It takes a VCF file of candidate variants and an alignment file (BAM/CRAM), and outputs an annotated VCF with per-sample read counts, quality metrics, and (optionally, with a panel of normals) artifact posteriors.
+It takes a VCF file of candidate variants, a case alignment file (BAM/CRAM), and a panel of normal alignments, and outputs an annotated VCF with per-sample read counts, quality metrics, and artifact posteriors.
 
 ## Installation
 
@@ -16,15 +16,7 @@ pip install -e .
 
 ## Quick start
 
-### Basic usage: Annotate variants with read counts
-```bash
-skua verify \
-  --vcf input.vcf \
-  --alignment case.bam \
-  --output output.vcf.gz
-```
-
-### With panel of normals: Compute artifact posteriors
+### Verify with panel of normals
 ```bash
 skua verify \
   --vcf input.vcf \
@@ -42,7 +34,7 @@ normal3.bam
 
 ### Print to stdout
 ```bash
-skua verify --vcf input.vcf --alignment case.bam
+skua verify --vcf input.vcf --alignment case.bam --normal-list normals.txt
 ```
 
 ## Input requirements
@@ -50,13 +42,13 @@ skua verify --vcf input.vcf --alignment case.bam
 - **VCF file** (`--vcf`): Single-ALT VCF with candidate variants (SNVs, indels, MNVs supported)
 - **Alignment file** (`--alignment`): BAM or CRAM file with aligned reads
 - **Reference** (`--reference`): FASTA reference genome; required only if using CRAM input
-- **Normal list** (`--normal-list`): Optional; text file listing one BAM/CRAM path per line for PON mode
+- **Normal list** (`--normal-list`): Required; text file listing one BAM/CRAM path per line
 
 ## Output fields
 
 All output is in VCF format with added FORMAT and INFO fields:
 
-### Case FORMAT fields (always present)
+### Case FORMAT fields
 - `SKUA_ALT_FWD`: Count of ALT-supporting reads on forward strand
 - `SKUA_ALT_REV`: Count of ALT-supporting reads on reverse strand
 - `SKUA_NON_ALT_FWD`: Count of non-ALT reads on forward strand
@@ -64,11 +56,11 @@ All output is in VCF format with added FORMAT and INFO fields:
 - `SKUA_USABLE`: Total usable reads at this locus
 - `SKUA_UNUSABLE`: Total unusable reads (low quality, indels at locus, etc.)
 
-### PON FORMAT fields (with `--normal-list` only)
+### PON FORMAT fields
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1)
 - `SKUA_BAYES_FACTOR`: Bayes factor comparing artifact vs. variant models
 
-### PON INFO fields (with `--normal-list` only)
+### PON INFO fields
 - `SKUA_PON_SAMPLE_COUNT`: Number of normal samples included after truncation
 - `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`: Aggregated read counts across normals
 - `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE`: Aggregated usable/unusable counts
