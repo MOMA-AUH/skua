@@ -17,7 +17,7 @@ from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncate
 from .variants import Variant, read_vcf_variant_file
 
 
-CASE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
+READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("SKUA_ALT_FWD", "Case ALT-supporting forward reads"),
     ("SKUA_ALT_REV", "Case ALT-supporting reverse reads"),
     ("SKUA_NON_ALT_FWD", "Case non-ALT forward reads"),
@@ -26,7 +26,7 @@ CASE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("SKUA_UNUSABLE", "Case unusable reads at this locus"),
 )
 
-PON_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
+MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
     ("SKUA_BAYES_FACTOR", "Float", "Bayes factor artifact-vs-variant"),
 )
@@ -47,14 +47,14 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
     """Ensure SKUA FORMAT/INFO definitions exist on the active VCF header."""
     annotated_header = header
 
-    for field_id, description in CASE_FORMAT_FIELD_DEFINITIONS:
+    for field_id, description in READ_COUNT_FORMAT_FIELD_DEFINITIONS:
         if field_id not in annotated_header.formats:
             annotated_header.add_line(
                 f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="{description}">'
             )
 
     if include_pon_info:
-        for field_id, field_type, description in PON_FORMAT_FIELD_DEFINITIONS:
+        for field_id, field_type, description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS:
             if field_id not in annotated_header.formats:
                 annotated_header.add_line(
                     f'##FORMAT=<ID={field_id},Number=1,Type={field_type},Description="{description}">'
@@ -86,8 +86,8 @@ def _variant_from_vcf_record(record: Any) -> Variant | None:
         return None
 
 
-def _annotate_case_format_fields(record: Any, evidence: AggregatedEvidence) -> None:
-    """Set case-count FORMAT annotations on all sample columns."""
+def _annotate_read_count_format_fields(record: Any, evidence: AggregatedEvidence) -> None:
+    """Set read-count FORMAT annotations on all sample columns."""
     for sample in record.samples.values():
         sample["SKUA_ALT_FWD"] = evidence.alt_forward
         sample["SKUA_ALT_REV"] = evidence.alt_reverse
@@ -127,7 +127,7 @@ def verify_snv_vcf_to_annotated_vcf(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Annotate an input VCF with case-count FORMAT fields for variants."""
+    """Annotate an input VCF with read-count FORMAT fields for variants."""
     destination_path: Path
     created_temp = False
     if output_path is None:
@@ -155,7 +155,7 @@ def verify_snv_vcf_to_annotated_vcf(
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
                         )
-                        _annotate_case_format_fields(record, evidence)
+                        _annotate_read_count_format_fields(record, evidence)
                     out_vcf.write(record)
 
         return _render_annotated_vcf_payload(destination_path)
@@ -176,7 +176,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> str:
-    """Annotate an input VCF with case FORMAT and PON INFO fields for variants."""
+    """Annotate an input VCF with read-count FORMAT and PON INFO fields for variants."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -223,7 +223,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
                             prior_variant_probability=prior_variant_probability,
                         )
 
-                        _annotate_case_format_fields(record, case_evidence)
+                        _annotate_read_count_format_fields(record, case_evidence)
                         _annotate_pon_sample_format_fields(
                             record,
                             artifact_posterior=stats.artifact_posterior,

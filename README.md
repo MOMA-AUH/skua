@@ -48,7 +48,9 @@ skua verify --vcf input.vcf --alignment case.bam --normal-list normals.txt
 
 All output is in VCF format with added FORMAT and INFO fields:
 
-### Case FORMAT fields
+### FORMAT fields
+
+Read-count fields:
 - `SKUA_ALT_FWD`: Count of ALT-supporting reads on forward strand
 - `SKUA_ALT_REV`: Count of ALT-supporting reads on reverse strand
 - `SKUA_NON_ALT_FWD`: Count of non-ALT reads on forward strand
@@ -56,7 +58,7 @@ All output is in VCF format with added FORMAT and INFO fields:
 - `SKUA_USABLE`: Total usable reads at this locus
 - `SKUA_UNUSABLE`: Total unusable reads (low quality, indels at locus, etc.)
 
-### PON FORMAT fields
+Model-score fields:
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1)
 - `SKUA_BAYES_FACTOR`: Bayes factor comparing artifact vs. variant models
 
@@ -78,6 +80,8 @@ Key parameters:
 - `--truncate` (default 0.1): Truncation percentile for PON sample inclusion
 - `--pseudocount` (default ε): Pseudocount for beta-binomial rate estimates
 - `--prior-variant-probability` (default 0.5): Prior probability for variant model
+
+Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
 ## Requirements
 
