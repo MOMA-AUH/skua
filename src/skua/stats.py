@@ -31,13 +31,6 @@ class Stats:
     dispersion_rho: float
     pseudocount: float
 
-    def to_dict(self) -> dict[str, dict[str, float | int] | float]:
-        """Return a JSON-serializable representation."""
-        return {
-            "bayes_factor": self.bayes_factor,
-            "artifact_posterior": self.artifact_posterior,
-        }
-
 
 def _bound(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
