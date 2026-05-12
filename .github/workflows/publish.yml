@@ -44,7 +44,7 @@ jobs:
         shell: bash -l {0}
         run: |
           CONDA_BLD_DIR="$(conda info --base)/conda-bld"
-           conda index "${CONDA_BLD_DIR}"
+          conda index "${CONDA_BLD_DIR}"
           conda create -y -n skua-smoke -c "file://${CONDA_BLD_DIR}" -c conda-forge -c bioconda python=3.12 skua
           conda run -n skua-smoke skua annotate --help
 
