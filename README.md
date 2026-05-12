@@ -32,11 +32,11 @@ Key input parameters:
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
 
 Other optional parameters:
-- `--min-baseq` (default 20): Minimum base quality for read bases
-- `--min-mapq` (default 20): Minimum mapping quality for reads
-- `--truncate` (default 0.1): Truncation percentile for PON sample inclusion
+- `--min-baseq` (default `20`): Minimum base quality for read bases
+- `--min-mapq` (default `20`): Minimum mapping quality for reads
+- `--truncate` (default `0.1`): Truncation percentile for PON sample inclusion
 - `--pseudocount` (default `sys.float_info.epsilon`): Pseudocount for beta-binomial rate estimates
-- `--prior-variant-probability` (default 0.5): Prior probability for variant model
+- `--prior-variant-probability` (default `0.5`): Prior probability for variant model
 
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
