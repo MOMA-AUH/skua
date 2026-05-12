@@ -27,8 +27,8 @@ READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
 )
 
 MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
-    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
     ("SKUA_LOG_BAYES_FACTOR", "Float", "Log Bayes factor artifact-vs-variant"),
+    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
 )
 
 PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
@@ -100,8 +100,8 @@ def _annotate_read_count_format_fields(record: Any, evidence: AggregatedEvidence
 def _annotate_pon_sample_format_fields(record: Any, *, artifact_posterior: float, log_bayes_factor: float) -> None:
     """Set PON model output FORMAT annotations on all sample columns."""
     for sample in record.samples.values():
-        sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
         sample["SKUA_LOG_BAYES_FACTOR"] = float(log_bayes_factor)
+        sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
 
 
 def _render_annotated_vcf_payload(output_path: Path) -> str:

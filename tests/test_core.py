@@ -552,7 +552,9 @@ def test_verify_snv_vcf_to_annotated_vcf_with_normals_writes_info_and_format(tmp
         min_mapq=20,
     )
 
+    assert "SKUA_LOG_BAYES_FACTOR" in payload
     assert "SKUA_ARTIFACT_POSTERIOR" in payload
+    
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
