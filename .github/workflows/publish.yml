@@ -43,7 +43,8 @@ jobs:
       - name: Smoke test package install
         shell: bash -l {0}
         run: |
-          conda create -y -n skua-smoke -c local -c conda-forge -c bioconda python=3.12 skua
+          CONDA_BLD_DIR="$(conda info --base)/conda-bld"
+          conda create -y -n skua-smoke -c "file://${CONDA_BLD_DIR}" -c conda-forge -c bioconda python=3.12 skua
           conda run -n skua-smoke skua annotate --help
 
       - name: Upload conda artifact
