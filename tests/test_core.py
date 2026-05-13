@@ -3,22 +3,22 @@ import json
 import pytest
 
 from skua.core import (
-    format_verification_results,
-    render_verification_results_json,
-    verify_snv_vcf_to_annotated_vcf,
-    verify_snv_vcf_to_annotated_vcf_with_normals,
-    verify_snv_vcf_to_json,
-    verify_snv_variant,
-    verify_snv_variant_with_normals,
-    verify_snv_variants_from_vcf,
-    write_verification_results_json,
+    annotate_snv_variant,
+    annotate_snv_variant_with_normals,
+    annotate_snv_variants_from_vcf,
+    annotate_snv_vcf,
+    annotate_snv_vcf_to_json,
+    annotate_snv_vcf_with_normals,
+    format_annotation_results,
+    render_annotation_results_json,
+    write_annotation_results_json,
 )
 from skua.evidence import AggregatedEvidence, UnusableReason
 from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 from skua.variants import Variant
 
 
-def test_verify_snv_variant_collects_evidence_for_single_variant() -> None:
+def test_annotate_snv_variant_collects_evidence_for_single_variant() -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -38,7 +38,7 @@ def test_verify_snv_variant_collects_evidence_for_single_variant() -> None:
     alignment_file = FakeAlignmentFile(reads)
     variant = Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")
 
-    counts = verify_snv_variant(
+    counts = annotate_snv_variant(
         alignment_file,
         variant,
         min_baseq=20,
@@ -54,7 +54,7 @@ def test_verify_snv_variant_collects_evidence_for_single_variant() -> None:
     assert counts.unusable == 0
 
 
-def test_verify_snv_variants_from_vcf_processes_simple_records_only(tmp_path) -> None:
+def test_annotate_snv_variants_from_vcf_processes_simple_records_only(tmp_path) -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -89,7 +89,7 @@ def test_verify_snv_variants_from_vcf_processes_simple_records_only(tmp_path) ->
     )
 
     results = list(
-        verify_snv_variants_from_vcf(
+        annotate_snv_variants_from_vcf(
             alignment_file,
             vcf_path,
             min_baseq=20,
@@ -105,7 +105,7 @@ def test_verify_snv_variants_from_vcf_processes_simple_records_only(tmp_path) ->
     assert alignment_file.fetch_calls == [("chr1", 105, 106), ("chr1", 199, 200), ("chr1", 299, 300)]
 
 
-def test_format_verification_results_returns_json_ready_records() -> None:
+def test_format_annotation_results_returns_json_ready_records() -> None:
     results = [
         (
             Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
@@ -121,7 +121,7 @@ def test_format_verification_results_returns_json_ready_records() -> None:
         )
     ]
 
-    records = format_verification_results(results)
+    records = format_annotation_results(results)
 
     assert records == [
         {
@@ -182,8 +182,8 @@ def test_verify_and_format_from_vcf_end_to_end(tmp_path) -> None:
         + "\n"
     )
 
-    rows = format_verification_results(
-        verify_snv_variants_from_vcf(
+    rows = format_annotation_results(
+        annotate_snv_variants_from_vcf(
             alignment_file,
             vcf_path,
             min_baseq=20,
@@ -212,7 +212,7 @@ def test_verify_and_format_from_vcf_end_to_end(tmp_path) -> None:
     ]
 
 
-def test_render_verification_results_json_returns_json_text() -> None:
+def test_render_annotation_results_json_returns_json_text() -> None:
     rows = [
         {
             "contig": "chr1",
@@ -233,12 +233,12 @@ def test_render_verification_results_json_returns_json_text() -> None:
         }
     ]
 
-    payload = render_verification_results_json(rows)
+    payload = render_annotation_results_json(rows)
 
     assert json.loads(payload) == rows
 
 
-def test_write_verification_results_json_writes_payload_to_file(tmp_path) -> None:
+def test_write_annotation_results_json_writes_payload_to_file(tmp_path) -> None:
     rows = [
         {
             "contig": "chr1",
@@ -258,12 +258,12 @@ def test_write_verification_results_json_writes_payload_to_file(tmp_path) -> Non
     ]
     output_path = tmp_path / "verification.json"
 
-    write_verification_results_json(rows, output_path)
+    write_annotation_results_json(rows, output_path)
 
     assert json.loads(output_path.read_text(encoding="utf-8")) == rows
 
 
-def test_verify_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> None:
+def test_annotate_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -295,7 +295,7 @@ def test_verify_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> Non
     )
     output_path = tmp_path / "verification.json"
 
-    payload = verify_snv_vcf_to_json(
+    payload = annotate_snv_vcf_to_json(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -326,7 +326,7 @@ def test_verify_snv_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> Non
     assert json.loads(output_path.read_text(encoding="utf-8")) == expected_rows
 
 
-def test_verify_snv_vcf_to_annotated_vcf_writes_case_format_fields(tmp_path) -> None:
+def test_annotate_snv_vcf_writes_case_format_fields(tmp_path) -> None:
     import pysam
 
     reads = [
@@ -370,7 +370,7 @@ def test_verify_snv_vcf_to_annotated_vcf_writes_case_format_fields(tmp_path) -> 
     )
     output_path = tmp_path / "annotated.vcf"
 
-    payload = verify_snv_vcf_to_annotated_vcf(
+    payload = annotate_snv_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -390,7 +390,7 @@ def test_verify_snv_vcf_to_annotated_vcf_writes_case_format_fields(tmp_path) -> 
         assert sample["SKUA_UNUSABLE"] == 1
 
 
-def test_verify_snv_vcf_to_annotated_vcf_supports_simple_insertion(tmp_path) -> None:
+def test_annotate_snv_vcf_supports_simple_insertion(tmp_path) -> None:
     import pysam
 
     reads = [
@@ -431,7 +431,7 @@ def test_verify_snv_vcf_to_annotated_vcf_supports_simple_insertion(tmp_path) -> 
     )
     output_path = tmp_path / "annotated_insertion.vcf"
 
-    payload = verify_snv_vcf_to_annotated_vcf(
+    payload = annotate_snv_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -449,7 +449,7 @@ def test_verify_snv_vcf_to_annotated_vcf_supports_simple_insertion(tmp_path) -> 
         assert sample["SKUA_UNUSABLE"] == 0
 
 
-def test_verify_snv_vcf_to_annotated_vcf_supports_bgzipped_output(tmp_path) -> None:
+def test_annotate_snv_vcf_supports_bgzipped_output(tmp_path) -> None:
     import pysam
 
     reads = [
@@ -479,7 +479,7 @@ def test_verify_snv_vcf_to_annotated_vcf_supports_bgzipped_output(tmp_path) -> N
     )
     output_path = tmp_path / "annotated.vcf.gz"
 
-    payload = verify_snv_vcf_to_annotated_vcf(
+    payload = annotate_snv_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -495,7 +495,7 @@ def test_verify_snv_vcf_to_annotated_vcf_supports_bgzipped_output(tmp_path) -> N
         assert sample["SKUA_ALT_FWD"] == 1
 
 
-def test_verify_snv_vcf_to_annotated_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
+def test_annotate_snv_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
     import pysam
 
     case_reads = [
@@ -543,7 +543,7 @@ def test_verify_snv_vcf_to_annotated_vcf_with_normals_writes_info_and_format(tmp
     )
     output_path = tmp_path / "annotated_pon.vcf"
 
-    payload = verify_snv_vcf_to_annotated_vcf_with_normals(
+    payload = annotate_snv_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[normal_alignment],
@@ -571,7 +571,7 @@ def test_verify_snv_vcf_to_annotated_vcf_with_normals_writes_info_and_format(tmp
         assert record.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
 
 
-def test_verify_snv_variant_with_normals_returns_case_and_normal_evidence() -> None:
+def test_annotate_snv_variant_with_normals_returns_case_and_normal_evidence() -> None:
     case_reads = [
         FakeRead(
             mapping_quality=60,
@@ -614,7 +614,7 @@ def test_verify_snv_variant_with_normals_returns_case_and_normal_evidence() -> N
 
     variant = Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")
 
-    result = verify_snv_variant_with_normals(
+    result = annotate_snv_variant_with_normals(
         case_alignment,
         variant,
         normal_alignments=[normal1_alignment, normal2_alignment],
@@ -633,8 +633,8 @@ def test_verify_snv_variant_with_normals_returns_case_and_normal_evidence() -> N
     assert "normals_with_ref_only" not in result
 
 
-def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> None:
-    from skua.core import verify_snv_vcf_to_json_with_normals
+def test_annotate_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> None:
+    from skua.core import annotate_snv_vcf_to_json_with_normals
 
     case_reads = [
         FakeRead(
@@ -670,7 +670,7 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
         + "\n"
     )
 
-    payload = verify_snv_vcf_to_json_with_normals(
+    payload = annotate_snv_vcf_to_json_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[normal_alignment],
@@ -717,8 +717,8 @@ def test_verify_snv_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> No
     ]
 
 
-def test_format_verification_results_with_normals_excludes_truncated_normals() -> None:
-    from skua.core import format_verification_results_with_normals
+def test_format_annotation_results_with_normals_excludes_truncated_normals() -> None:
+    from skua.core import format_annotation_results_with_normals
 
     variant = Variant(contig="chr1", ref_pos0=105, ref="A", alt="T")
     case_evidence = AggregatedEvidence(
@@ -750,7 +750,7 @@ def test_format_verification_results_with_normals_excludes_truncated_normals() -
         unusable_by_reason={},
     )
 
-    rows = format_verification_results_with_normals(
+    rows = format_annotation_results_with_normals(
         [
             (
                 variant,

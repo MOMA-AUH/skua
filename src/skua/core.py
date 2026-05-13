@@ -119,7 +119,7 @@ def _vcf_write_mode(output_path: Path) -> str:
     return "w"
 
 
-def verify_snv_vcf_to_annotated_vcf(
+def annotate_snv_vcf(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -149,7 +149,7 @@ def verify_snv_vcf_to_annotated_vcf(
                 for record in source_vcf:
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
-                        evidence = verify_snv_variant(
+                        evidence = annotate_snv_variant(
                             alignment_file,
                             variant,
                             min_baseq=min_baseq,
@@ -164,7 +164,7 @@ def verify_snv_vcf_to_annotated_vcf(
             destination_path.unlink()
 
 
-def verify_snv_vcf_to_annotated_vcf_with_normals(
+def annotate_snv_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -201,7 +201,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
                 for record in source_vcf:
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
-                        pon_result = verify_snv_variant_with_normals(
+                        pon_result = annotate_snv_variant_with_normals(
                             alignment_file,
                             variant,
                             normal_alignments=normal_alignments,
@@ -246,7 +246,7 @@ def verify_snv_vcf_to_annotated_vcf_with_normals(
             destination_path.unlink()
 
 
-def verify_snv_variant(
+def annotate_snv_variant(
     alignment_file: Any,
     variant: Variant,
     *,
@@ -265,7 +265,7 @@ def verify_snv_variant(
     )
 
 
-def verify_snv_variant_with_normals(
+def annotate_snv_variant_with_normals(
     alignment_file: Any,
     variant: Variant,
     *,
@@ -277,7 +277,7 @@ def verify_snv_variant_with_normals(
     if normal_alignments is None:
         normal_alignments = []
 
-    case_evidence = verify_snv_variant(
+    case_evidence = annotate_snv_variant(
         alignment_file,
         variant,
         min_baseq=min_baseq,
@@ -296,7 +296,7 @@ def verify_snv_variant_with_normals(
     )
 
     for normal_alignment in normal_alignments:
-        normal_evidence = verify_snv_variant(
+        normal_evidence = annotate_snv_variant(
             normal_alignment,
             variant,
             min_baseq=min_baseq,
@@ -325,7 +325,7 @@ def verify_snv_variant_with_normals(
     }
 
 
-def verify_snv_variants_from_vcf(
+def annotate_snv_variants_from_vcf(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -336,7 +336,7 @@ def verify_snv_variants_from_vcf(
     for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
-            verify_snv_variant(
+            annotate_snv_variant(
                 alignment_file,
                 variant,
                 min_baseq=min_baseq,
@@ -345,10 +345,10 @@ def verify_snv_variants_from_vcf(
         )
 
 
-def format_verification_results(
+def format_annotation_results(
     results: Iterable[tuple[Variant, AggregatedEvidence]],
 ) -> list[dict[str, Any]]:
-    """Convert verification results to JSON/tabular-ready row dictionaries."""
+    """Convert annotation results to JSON/tabular-ready row dictionaries."""
     rows: list[dict[str, Any]] = []
     for variant, evidence in results:
         rows.append(
@@ -376,32 +376,32 @@ def format_verification_results(
     return rows
 
 
-def render_verification_results_json(rows: Iterable[dict[str, Any]]) -> str:
-    """Render formatted verification rows as JSON text."""
+def render_annotation_results_json(rows: Iterable[dict[str, Any]]) -> str:
+    """Render formatted annotation rows as JSON text."""
     return json.dumps(list(rows), indent=2)
 
 
-def write_verification_results_json(
+def write_annotation_results_json(
     rows: Iterable[dict[str, Any]],
     output_path: str | Path,
 ) -> None:
-    """Write formatted verification rows to a JSON file."""
+    """Write formatted annotation rows to a JSON file."""
     Path(output_path).write_text(
-        render_verification_results_json(rows),
+        render_annotation_results_json(rows),
         encoding="utf-8",
     )
 
 
-def _build_verification_rows(
+def _build_annotation_rows(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
     min_baseq: int,
     min_mapq: int,
 ) -> list[dict[str, Any]]:
-    """Build formatted verification rows from one alignment and one VCF."""
-    return format_verification_results(
-        verify_snv_variants_from_vcf(
+    """Build formatted annotation rows from one alignment and one VCF."""
+    return format_annotation_results(
+        annotate_snv_variants_from_vcf(
             alignment_file,
             vcf_path,
             min_baseq=min_baseq,
@@ -423,7 +423,7 @@ def _render_and_optionally_write(
     return payload
 
 
-def verify_snv_vcf_to_json(
+def annotate_snv_vcf_to_json(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -431,8 +431,8 @@ def verify_snv_vcf_to_json(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Run SNV verification from VCF and return JSON output, optionally writing to file."""
-    rows = _build_verification_rows(
+    """Run SNV annotation from VCF and return JSON output, optionally writing to file."""
+    rows = _build_annotation_rows(
         alignment_file,
         vcf_path,
         min_baseq=min_baseq,
@@ -440,12 +440,12 @@ def verify_snv_vcf_to_json(
     )
     return _render_and_optionally_write(
         rows,
-        renderer=render_verification_results_json,
+        renderer=render_annotation_results_json,
         output_path=output_path,
     )
 
 
-def verify_snv_variants_from_vcf_with_normals(
+def annotate_snv_variants_from_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -460,7 +460,7 @@ def verify_snv_variants_from_vcf_with_normals(
     for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
-            verify_snv_variant_with_normals(
+            annotate_snv_variant_with_normals(
                 alignment_file,
                 variant,
                 normal_alignments=normal_alignments,
@@ -470,14 +470,14 @@ def verify_snv_variants_from_vcf_with_normals(
         )
 
 
-def format_verification_results_with_normals(
+def format_annotation_results_with_normals(
     results: Iterable[tuple[Variant, dict[str, Any]]],
     *,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> list[dict[str, Any]]:
-    """Convert PON verification results to JSON/tabular-ready row dictionaries."""
+    """Convert PON annotation results to JSON/tabular-ready row dictionaries."""
     rows: list[dict[str, Any]] = []
     for variant, pon_result in results:
         evidence = pon_result["case_evidence"]
@@ -541,7 +541,7 @@ def format_verification_results_with_normals(
     return rows
 
 
-def _build_verification_rows_with_normals(
+def _build_annotation_rows_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -552,9 +552,9 @@ def _build_verification_rows_with_normals(
     pseudocount: float,
     prior_variant_probability: float,
 ) -> list[dict[str, Any]]:
-    """Build formatted PON verification rows from case + normal alignments and one VCF."""
-    return format_verification_results_with_normals(
-        verify_snv_variants_from_vcf_with_normals(
+    """Build formatted PON annotation rows from case + normal alignments and one VCF."""
+    return format_annotation_results_with_normals(
+        annotate_snv_variants_from_vcf_with_normals(
             alignment_file,
             vcf_path,
             normal_alignments=normal_alignments,
@@ -567,7 +567,7 @@ def _build_verification_rows_with_normals(
     )
 
 
-def verify_snv_vcf_to_json_with_normals(
+def annotate_snv_vcf_to_json_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -579,11 +579,11 @@ def verify_snv_vcf_to_json_with_normals(
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> str:
-    """Run PON SNV verification from VCF and return JSON output, optionally writing to file."""
+    """Run PON SNV annotation from VCF and return JSON output, optionally writing to file."""
     if normal_alignments is None:
         normal_alignments = []
 
-    rows = _build_verification_rows_with_normals(
+    rows = _build_annotation_rows_with_normals(
         alignment_file,
         vcf_path,
         normal_alignments=normal_alignments,
@@ -595,7 +595,7 @@ def verify_snv_vcf_to_json_with_normals(
     )
     return _render_and_optionally_write(
         rows,
-        renderer=render_verification_results_json,
+        renderer=render_annotation_results_json,
         output_path=output_path,
     )
 
