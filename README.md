@@ -7,7 +7,7 @@ Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750
 The recommended way to install **skua** is via [conda](https://docs.conda.io/), using the `micknudsen` channel:
 
 ```bash
-conda install -c micknudsen skua
+conda install micknudsen::skua
 ```
 
 ## Commands
