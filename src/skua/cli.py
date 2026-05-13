@@ -1,6 +1,7 @@
 """Command-line interface for skua."""
 
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 
 import pysam
@@ -98,8 +99,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.reference is not None:
             alignment_kwargs["reference_filename"] = args.reference
 
-        # Open normal alignments
-        normal_alignments = []
         normal_paths: list[str] = []
         for line in Path(args.normal_list).read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
@@ -109,35 +108,39 @@ def main(argv: list[str] | None = None) -> int:
         if not normal_paths:
             parser.error("--normal-list must include at least one normal alignment path")
 
-        if normal_paths:
+        for normal_path in normal_paths:
+            normal_path_obj = Path(normal_path)
+            if normal_path_obj.suffix.lower() == ".cram" and args.reference is None:
+                parser.error("--reference is required for CRAM input")
+
+        with ExitStack() as stack:
+            alignment_file = stack.enter_context(
+                pysam.AlignmentFile(args.alignment, "rb", **alignment_kwargs)
+            )
+
+            normal_alignments = []
             for normal_path in normal_paths:
-                normal_path_obj = Path(normal_path)
-                if normal_path_obj.suffix.lower() == ".cram" and args.reference is None:
-                    parser.error("--reference is required for CRAM input")
                 normal_alignments.append(
-                    pysam.AlignmentFile(normal_path, "rb", **alignment_kwargs)
+                    stack.enter_context(
+                        pysam.AlignmentFile(normal_path, "rb", **alignment_kwargs)
+                    )
                 )
 
-        try:
-            with pysam.AlignmentFile(args.alignment, "rb", **alignment_kwargs) as alignment_file:
-                pon_kwargs = {
-                    "truncate": args.truncate,
-                    "prior_variant_probability": args.prior_variant_probability,
-                }
-                if args.pseudocount is not None:
-                    pon_kwargs["pseudocount"] = args.pseudocount
-                payload = annotate_snv_vcf_with_normals(
-                    alignment_file,
-                    Path(args.vcf),
-                    normal_alignments=normal_alignments,
-                    output_path=args.output,
-                    min_baseq=args.min_baseq,
-                    min_mapq=args.min_mapq,
-                    **pon_kwargs,
-                )
-        finally:
-            for normal_alignment in normal_alignments:
-                normal_alignment.close()
+            pon_kwargs = {
+                "truncate": args.truncate,
+                "prior_variant_probability": args.prior_variant_probability,
+            }
+            if args.pseudocount is not None:
+                pon_kwargs["pseudocount"] = args.pseudocount
+            payload = annotate_snv_vcf_with_normals(
+                alignment_file,
+                Path(args.vcf),
+                normal_alignments=normal_alignments,
+                output_path=args.output,
+                min_baseq=args.min_baseq,
+                min_mapq=args.min_mapq,
+                **pon_kwargs,
+            )
 
         if args.output is None:
             print(payload, end="")

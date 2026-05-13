@@ -309,6 +309,55 @@ def test_main_annotate_rejects_empty_normal_list(capsys, tmp_path) -> None:
     assert "--normal-list must include at least one normal alignment path" in capsys.readouterr().err
 
 
+def test_main_annotate_closes_opened_normals_when_later_open_fails(monkeypatch, tmp_path) -> None:
+    opened_files: list[FakeAlignmentFile] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            if path == "bad-normal.bam":
+                raise OSError("failed to open normal")
+            self.path = path
+            self.mode = mode
+            self.kwargs = kwargs
+            self.closed = False
+            opened_files.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self.close()
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+
+    normal_list_path = tmp_path / "normals.txt"
+    normal_list_path.write_text("good-normal.bam\nbad-normal.bam\n", encoding="utf-8")
+
+    try:
+        cli.main(
+            [
+                "annotate",
+                "--vcf",
+                "input.vcf",
+                "--alignment",
+                "case.bam",
+                "--normal-list",
+                str(normal_list_path),
+            ]
+        )
+    except OSError as exc:
+        assert str(exc) == "failed to open normal"
+    else:
+        raise AssertionError("Expected OSError when a later normal alignment open fails")
+
+    assert [alignment.path for alignment in opened_files] == ["case.bam", "good-normal.bam"]
+    assert all(alignment.closed for alignment in opened_files)
+
+
 def test_main_annotate_rejects_removed_output_format_flag(capsys, tmp_path) -> None:
     normal_list_path = tmp_path / "normals.txt"
     normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
