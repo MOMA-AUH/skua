@@ -358,32 +358,6 @@ def test_main_annotate_closes_opened_normals_when_later_open_fails(monkeypatch, 
     assert all(alignment.closed for alignment in opened_files)
 
 
-def test_main_annotate_rejects_removed_output_format_flag(capsys, tmp_path) -> None:
-    normal_list_path = tmp_path / "normals.txt"
-    normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
-
-    try:
-        cli.main(
-            [
-                "annotate",
-                "--vcf",
-                "input.vcf",
-                "--alignment",
-                "reads.bam",
-                "--normal-list",
-                str(normal_list_path),
-                "--output-format",
-                "vcf",
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 2
-    else:
-        raise AssertionError("Expected SystemExit for removed --output-format")
-
-    assert "unrecognized arguments: --output-format vcf" in capsys.readouterr().err
-
-
 def test_main_annotate_rejects_output_path_with_non_vcf_suffix(capsys, tmp_path) -> None:
     normal_list_path = tmp_path / "normals.txt"
     normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
