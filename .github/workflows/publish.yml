@@ -47,18 +47,18 @@ jobs:
         run: |
           conda info
           conda list conda-build
-          conda build --version
+          conda-build --version
 
       - name: Build package
         shell: bash -l {0}
         run: |
-          conda build conda-recipe/
+          conda-build conda-recipe/
 
       - name: Locate built package
         id: locate
         shell: bash -l {0}
         run: |
-          PKG_PATH="$(conda build conda-recipe/ --output)"
+          PKG_PATH="$(conda-build conda-recipe/ --output)"
           if [ -z "$PKG_PATH" ]; then
             echo "No conda package path reported by conda build"
             exit 1
@@ -72,7 +72,7 @@ jobs:
       - name: Smoke test built package
         shell: bash -l {0}
         run: |
-          conda build --test "${{ steps.locate.outputs.pkg_path }}"
+          conda-build --test "${{ steps.locate.outputs.pkg_path }}"
 
       - name: Upload conda artifact
         uses: actions/upload-artifact@v4
