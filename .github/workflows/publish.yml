@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CHANNEL: ${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}
+      CHANNEL: ${{ github.event.inputs.channel || 'MOMA-AUH' }}
 
     steps:
       - name: Check out repository
@@ -40,7 +40,14 @@ jobs:
       - name: Install conda-build
         shell: bash -l {0}
         run: |
-          conda install -n base -y -c conda-forge conda-build
+          conda install -y -c conda-forge conda-build
+
+      - name: Verify conda-build availability
+        shell: bash -l {0}
+        run: |
+          conda info
+          conda list conda-build
+          conda build --version
 
       - name: Build package
         shell: bash -l {0}
@@ -80,11 +87,11 @@ jobs:
     needs: build-and-test
 
     env:
-      CHANNEL: ${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}
+      CHANNEL: ${{ github.event.inputs.channel || 'MOMA-AUH' }}
 
     environment:
       name: conda
-      url: https://anaconda.org/${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}/skua
+      url: https://anaconda.org/${{ github.event.inputs.channel || 'MOMA-AUH' }}/skua
 
     steps:
       - name: Download conda artifact
