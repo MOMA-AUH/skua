@@ -5,6 +5,13 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build and publish (for example v0.1.1)"
+        required: true
+      channel:
+        description: "Anaconda channel/user to publish to"
+        required: true
 
 jobs:
   build-and-test:
@@ -12,11 +19,13 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CHANNEL: MOMA-AUH
+      CHANNEL: ${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Set up Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -66,16 +75,16 @@ jobs:
 
   publish-conda:
     name: Publish To Anaconda Channel
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: build-and-test
 
     env:
-      CHANNEL: MOMA-AUH
+      CHANNEL: ${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}
 
     environment:
       name: conda
-      url: https://anaconda.org/MOMA-AUH/skua
+      url: https://anaconda.org/${{ github.event.inputs.channel || vars.ANACONDA_CHANNEL || 'MOMA-AUH' }}/skua
 
     steps:
       - name: Download conda artifact
@@ -96,7 +105,7 @@ jobs:
         run: |
           conda install -y -c defaults anaconda-client
 
-      - name: Publish package to MOMA-AUH channel
+      - name: Publish package to configured channel
         shell: bash -l {0}
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
@@ -106,4 +115,4 @@ jobs:
             echo "No conda package found to upload"
             exit 1
           fi
-          anaconda -t "$ANACONDA_API_TOKEN" upload --user "$CHANNEL" "$PKG_PATH"
+          anaconda -t "$ANACONDA_API_TOKEN" upload --skip-existing --user "$CHANNEL" "$PKG_PATH"
