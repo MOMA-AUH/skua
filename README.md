@@ -1,15 +1,15 @@
 # skua
 
-[![Anaconda-Server Badge](https://anaconda.org/micknudsen/skua/badges/version.svg)](https://anaconda.org/micknudsen/skua) [![Anaconda-Server Badge](https://anaconda.org/micknudsen/skua/badges/downloads.svg)](https://anaconda.org/micknudsen/skua)
+[![Anaconda-Server Badge](https://anaconda.org/MOMA-AUH/skua/badges/version.svg)](https://anaconda.org/MOMA-AUH/skua) [![Anaconda-Server Badge](https://anaconda.org/MOMA-AUH/skua/badges/downloads.svg)](https://anaconda.org/MOMA-AUH/skua)
 
 Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads with support for SNV, MNV, and INDEL variants. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
 ## Installation
 
-The recommended way to install **skua** is via [conda](https://docs.conda.io/), using the `micknudsen` channel:
+The recommended way to install **skua** is via [conda](https://docs.conda.io/), using the `MOMA-AUH` channel:
 
 ```bash
-conda install micknudsen::skua
+conda install MOMA-AUH::skua
 ```
 
 ## Commands

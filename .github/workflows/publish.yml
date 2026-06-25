@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CHANNEL: micknudsen
+      CHANNEL: MOMA-AUH
 
     steps:
       - name: Check out repository
@@ -58,11 +58,11 @@ jobs:
     needs: build-and-test
 
     env:
-      CHANNEL: micknudsen
+      CHANNEL: MOMA-AUH
 
     environment:
       name: conda
-      url: https://anaconda.org/micknudsen/skua
+      url: https://anaconda.org/MOMA-AUH/skua
 
     steps:
       - name: Download conda artifact
@@ -83,7 +83,7 @@ jobs:
         run: |
           conda install -y -c defaults anaconda-client
 
-      - name: Publish package to micknudsen channel
+      - name: Publish package to MOMA-AUH channel
         shell: bash -l {0}
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
