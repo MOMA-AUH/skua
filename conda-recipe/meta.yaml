@@ -29,7 +29,7 @@ test:
     - skua annotate --help
 
 about:
-  home: https://github.com/micknudsen/skua
+  home: https://github.com/MOMA-AUH/skua
   summary: Predatory and kleptoparasitic variant caller for detecting subclonal mutations in deep sequencing data
   license: MIT
   license_file: LICENSE
