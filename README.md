@@ -33,6 +33,8 @@ Key input parameters:
 - `--reference`: Reference FASTA file, required when any input alignment is CRAM
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
 
+If the input VCF is site-only and has no samples, skua will add a single output sample using the alignment read-group `SM` tag. This requires exactly one unique `SM` value in the BAM/CRAM header; skua will fail if `SM` is missing or if multiple distinct `SM` values are present.
+
 Other optional parameters:
 - `--min-baseq` (default `20`): Minimum base quality for read bases
 - `--min-mapq` (default `20`): Minimum mapping quality for reads
