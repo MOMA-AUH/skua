@@ -43,6 +43,38 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _alignment_sample_name(alignment_file: Any) -> str:
+    """Return the single usable read-group sample name for an alignment file."""
+    header = getattr(alignment_file, "header", None)
+    if header is None:
+        raise ValueError("Alignment file does not expose a header with read-group sample names")
+
+    if hasattr(header, "to_dict"):
+        header_dict = header.to_dict()
+    elif isinstance(header, dict):
+        header_dict = header
+    else:
+        raise ValueError("Alignment file header does not expose read-group metadata")
+
+    sample_names: list[str] = []
+    for read_group in header_dict.get("RG", []):
+        if not isinstance(read_group, dict):
+            continue
+        sample_name = read_group.get("SM")
+        if sample_name:
+            sample_names.append(str(sample_name))
+
+    unique_sample_names = list(dict.fromkeys(sample_names))
+    if not unique_sample_names:
+        raise ValueError("Alignment file must contain exactly one usable read-group SM tag")
+    if len(unique_sample_names) > 1:
+        raise ValueError(
+            "Alignment file contains multiple distinct read-group SM tags: "
+            + ", ".join(unique_sample_names)
+        )
+    return unique_sample_names[0]
+
+
 def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> Any:
     """Ensure SKUA FORMAT/INFO definitions exist on the active VCF header."""
     annotated_header = header
@@ -84,6 +116,23 @@ def _variant_from_vcf_record(record: Any) -> Variant | None:
         )
     except ValueError:
         return None
+
+
+def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
+    """Copy a site-only VCF record into an output header that has one sample."""
+    copied_record = out_vcf.new_record(
+        contig=record.contig,
+        start=record.start,
+        stop=record.stop,
+        id=record.id,
+        alleles=record.alleles,
+        qual=record.qual,
+    )
+    for filter_id in record.filter.keys():
+        copied_record.filter.add(filter_id)
+    for key, value in record.info.items():
+        copied_record.info[key] = value
+    return copied_record
 
 
 def _annotate_read_count_format_fields(record: Any, evidence: AggregatedEvidence) -> None:
@@ -141,12 +190,19 @@ def annotate_snv_vcf(
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=False)
+            site_only_sample_name: str | None = None
+            if len(source_vcf.header.samples) == 0:
+                site_only_sample_name = _alignment_sample_name(alignment_file)
+                header.add_sample(site_only_sample_name)
+
             with pysam.VariantFile(
                 str(destination_path),
                 _vcf_write_mode(destination_path),
                 header=header,
             ) as out_vcf:
                 for record in source_vcf:
+                    if site_only_sample_name is not None:
+                        record = _copy_vcf_record_with_sample(record, out_vcf)
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
                         evidence = annotate_snv_variant(
@@ -193,12 +249,19 @@ def annotate_snv_vcf_with_normals(
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=True)
+            site_only_sample_name: str | None = None
+            if len(source_vcf.header.samples) == 0:
+                site_only_sample_name = _alignment_sample_name(alignment_file)
+                header.add_sample(site_only_sample_name)
+
             with pysam.VariantFile(
                 str(destination_path),
                 _vcf_write_mode(destination_path),
                 header=header,
             ) as out_vcf:
                 for record in source_vcf:
+                    if site_only_sample_name is not None:
+                        record = _copy_vcf_record_with_sample(record, out_vcf)
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
                         pon_result = annotate_snv_variant_with_normals(
@@ -598,5 +661,3 @@ def annotate_snv_vcf_to_json_with_normals(
         renderer=render_annotation_results_json,
         output_path=output_path,
     )
-
-

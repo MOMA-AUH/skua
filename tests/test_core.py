@@ -14,7 +14,7 @@ from skua.core import (
     write_annotation_results_json,
 )
 from skua.evidence import AggregatedEvidence, UnusableReason
-from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
+from tests.helpers import FakeAlignmentFile, FakeAlignmentHeader, FakeRead, build_linear_pairs
 from skua.variants import Variant
 
 
@@ -495,6 +495,109 @@ def test_annotate_snv_vcf_supports_bgzipped_output(tmp_path) -> None:
         assert sample["SKUA_ALT_FWD"] == 1
 
 
+def test_annotate_snv_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> None:
+    import pysam
+
+    case_reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    case_alignment = FakeAlignmentFile(
+        case_reads,
+        header=FakeAlignmentHeader([{"SM": "CASE"}]),
+    )
+
+    vcf_path = tmp_path / "site_only.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated_site_only.vcf"
+
+    payload = annotate_snv_vcf_with_normals(
+        case_alignment,
+        vcf_path,
+        normal_alignments=[],
+        output_path=output_path,
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert "SKUA_ARTIFACT_POSTERIOR" in payload
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        assert list(annotated_vcf.header.samples) == ["CASE"]
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+        assert sample["SKUA_ALT_REV"] == 0
+        assert sample["SKUA_NON_ALT_FWD"] == 0
+        assert sample["SKUA_NON_ALT_REV"] == 0
+        assert sample["SKUA_USABLE"] == 1
+        assert sample["SKUA_UNUSABLE"] == 0
+        assert 0.0 <= sample["SKUA_ARTIFACT_POSTERIOR"] <= 1.0
+        assert isinstance(sample["SKUA_LOG_BAYES_FACTOR"], float)
+
+
+def test_annotate_snv_vcf_with_normals_requires_single_alignment_sample_name(tmp_path) -> None:
+    case_reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    vcf_path = tmp_path / "site_only.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    no_sm_alignment = FakeAlignmentFile(case_reads, header=FakeAlignmentHeader([]))
+    with pytest.raises(ValueError, match="usable read-group SM"):
+        annotate_snv_vcf_with_normals(
+            no_sm_alignment,
+            vcf_path,
+            normal_alignments=[],
+            min_baseq=20,
+            min_mapq=20,
+        )
+
+    multi_sm_alignment = FakeAlignmentFile(
+        case_reads,
+        header=FakeAlignmentHeader([{"SM": "CASE"}, {"SM": "TUMOR"}]),
+    )
+    with pytest.raises(ValueError, match="multiple distinct read-group SM tags"):
+        annotate_snv_vcf_with_normals(
+            multi_sm_alignment,
+            vcf_path,
+            normal_alignments=[],
+            min_baseq=20,
+            min_mapq=20,
+        )
+
+
 def test_annotate_snv_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
     import pysam
 
@@ -775,5 +878,4 @@ def test_format_annotation_results_with_normals_excludes_truncated_normals() -> 
     assert rows[0]["counts"]["normal"]["alt_forward"] == 1
     assert rows[0]["counts"]["normal"]["non_alt_forward"] == 99
     assert rows[0]["counts"]["normal"]["usable"] == 100
-
 
