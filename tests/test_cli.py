@@ -64,7 +64,7 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_snv_vcf_with_normals",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 
@@ -135,7 +135,7 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_snv_vcf_with_normals",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 
@@ -210,7 +210,7 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_snv_vcf_with_normals",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 

@@ -2,6 +2,7 @@
 
 import gzip
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import tempfile
@@ -12,7 +13,7 @@ from typing import Iterator
 
 import pysam
 
-from .evidence import AggregatedEvidence, collect_snv_evidence_from_alignment
+from .evidence import AggregatedEvidence, collect_evidence_from_alignment
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
 from .variants import Variant, read_vcf_variant_file
 
@@ -41,6 +42,20 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_PON_UNUSABLE", "Integer", "PON unusable reads after truncation"),
     ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
 )
+
+
+@dataclass(frozen=True)
+class PonAnnotation:
+    """Evidence collected for one case variant and its panel of normals.
+
+    ``normal_evidences`` preserves one :class:`AggregatedEvidence` object per
+    normal alignment. ``normal_aggregate_evidence`` is their unfiltered sum;
+    callers that need a truncated panel can apply ``truncated_normal_evidences``.
+    """
+
+    case_evidence: AggregatedEvidence
+    normal_evidences: tuple[AggregatedEvidence, ...]
+    normal_aggregate_evidence: AggregatedEvidence
 
 
 def _alignment_sample_name(alignment_file: Any) -> str:
@@ -168,7 +183,7 @@ def _vcf_write_mode(output_path: Path) -> str:
     return "w"
 
 
-def annotate_snv_vcf(
+def annotate_vcf(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -205,7 +220,7 @@ def annotate_snv_vcf(
                         record = _copy_vcf_record_with_sample(record, out_vcf)
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
-                        evidence = annotate_snv_variant(
+                        evidence = annotate_variant(
                             alignment_file,
                             variant,
                             min_baseq=min_baseq,
@@ -220,7 +235,7 @@ def annotate_snv_vcf(
             destination_path.unlink()
 
 
-def annotate_snv_vcf_with_normals(
+def annotate_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -264,23 +279,23 @@ def annotate_snv_vcf_with_normals(
                         record = _copy_vcf_record_with_sample(record, out_vcf)
                     variant = _variant_from_vcf_record(record)
                     if variant is not None:
-                        pon_result = annotate_snv_variant_with_normals(
+                        pon_result = annotate_variant_with_normals(
                             alignment_file,
                             variant,
                             normal_alignments=normal_alignments,
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
                         )
-                        case_evidence = pon_result["case_evidence"]
+                        case_evidence = pon_result.case_evidence
                         normal_samples_included = truncated_normal_evidences(
-                            pon_result["normal_evidences"],
+                            list(pon_result.normal_evidences),
                             truncate=truncate,
                         )
                         normal_output_evidence = aggregate_evidence(normal_samples_included)
                         stats = compute_stats(
                             case_evidence,
                             normal_output_evidence,
-                            per_sample_evidences=pon_result["normal_evidences"],
+                            per_sample_evidences=list(pon_result.normal_evidences),
                             truncate=truncate,
                             pseudocount=pseudocount,
                             prior_variant_probability=prior_variant_probability,
@@ -309,7 +324,7 @@ def annotate_snv_vcf_with_normals(
             destination_path.unlink()
 
 
-def annotate_snv_variant(
+def annotate_variant(
     alignment_file: Any,
     variant: Variant,
     *,
@@ -317,7 +332,7 @@ def annotate_snv_variant(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one variant from one alignment."""
-    return collect_snv_evidence_from_alignment(
+    return collect_evidence_from_alignment(
         alignment_file,
         contig=variant.contig,
         ref_pos0=variant.ref_pos0,
@@ -328,19 +343,19 @@ def annotate_snv_variant(
     )
 
 
-def annotate_snv_variant_with_normals(
+def annotate_variant_with_normals(
     alignment_file: Any,
     variant: Variant,
     *,
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
-) -> dict[str, Any]:
+) -> PonAnnotation:
     """Collect case and normal evidence for one variant."""
     if normal_alignments is None:
         normal_alignments = []
 
-    case_evidence = annotate_snv_variant(
+    case_evidence = annotate_variant(
         alignment_file,
         variant,
         min_baseq=min_baseq,
@@ -359,7 +374,7 @@ def annotate_snv_variant_with_normals(
     )
 
     for normal_alignment in normal_alignments:
-        normal_evidence = annotate_snv_variant(
+        normal_evidence = annotate_variant(
             normal_alignment,
             variant,
             min_baseq=min_baseq,
@@ -381,14 +396,14 @@ def annotate_snv_variant_with_normals(
             unusable_by_reason=normal_unusable_by_reason,
         )
 
-    return {
-        "case_evidence": case_evidence,
-        "normal_evidences": normal_evidences,
-        "normal_aggregate_evidence": normal_aggregate_evidence,
-    }
+    return PonAnnotation(
+        case_evidence=case_evidence,
+        normal_evidences=tuple(normal_evidences),
+        normal_aggregate_evidence=normal_aggregate_evidence,
+    )
 
 
-def annotate_snv_variants_from_vcf(
+def annotate_variants_from_vcf(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -399,7 +414,7 @@ def annotate_snv_variants_from_vcf(
     for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
-            annotate_snv_variant(
+            annotate_variant(
                 alignment_file,
                 variant,
                 min_baseq=min_baseq,
@@ -464,7 +479,7 @@ def _build_annotation_rows(
 ) -> list[dict[str, Any]]:
     """Build formatted annotation rows from one alignment and one VCF."""
     return format_annotation_results(
-        annotate_snv_variants_from_vcf(
+        annotate_variants_from_vcf(
             alignment_file,
             vcf_path,
             min_baseq=min_baseq,
@@ -486,7 +501,7 @@ def _render_and_optionally_write(
     return payload
 
 
-def annotate_snv_vcf_to_json(
+def annotate_vcf_to_json(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -494,7 +509,7 @@ def annotate_snv_vcf_to_json(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Run SNV annotation from VCF and return JSON output, optionally writing to file."""
+    """Run variant annotation from VCF and return JSON output, optionally writing to file."""
     rows = _build_annotation_rows(
         alignment_file,
         vcf_path,
@@ -507,23 +522,22 @@ def annotate_snv_vcf_to_json(
         output_path=output_path,
     )
 
-
-def annotate_snv_variants_from_vcf_with_normals(
+def annotate_variants_from_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
-) -> Iterator[tuple[Variant, dict[str, Any]]]:
-    """Yield per-variant case+normal evidence for SNV records from a VCF file."""
+) -> Iterator[tuple[Variant, PonAnnotation]]:
+    """Yield per-variant case+normal evidence for variant records from a VCF file."""
     if normal_alignments is None:
         normal_alignments = []
 
     for variant in read_vcf_variant_file(vcf_path):
         yield (
             variant,
-            annotate_snv_variant_with_normals(
+            annotate_variant_with_normals(
                 alignment_file,
                 variant,
                 normal_alignments=normal_alignments,
@@ -534,7 +548,7 @@ def annotate_snv_variants_from_vcf_with_normals(
 
 
 def format_annotation_results_with_normals(
-    results: Iterable[tuple[Variant, dict[str, Any]]],
+    results: Iterable[tuple[Variant, PonAnnotation]],
     *,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
@@ -543,8 +557,8 @@ def format_annotation_results_with_normals(
     """Convert PON annotation results to JSON/tabular-ready row dictionaries."""
     rows: list[dict[str, Any]] = []
     for variant, pon_result in results:
-        evidence = pon_result["case_evidence"]
-        per_sample_evidences = pon_result["normal_evidences"]
+        evidence = pon_result.case_evidence
+        per_sample_evidences = list(pon_result.normal_evidences)
 
         normal_samples_included = truncated_normal_evidences(
             per_sample_evidences,
@@ -617,7 +631,7 @@ def _build_annotation_rows_with_normals(
 ) -> list[dict[str, Any]]:
     """Build formatted PON annotation rows from case + normal alignments and one VCF."""
     return format_annotation_results_with_normals(
-        annotate_snv_variants_from_vcf_with_normals(
+        annotate_variants_from_vcf_with_normals(
             alignment_file,
             vcf_path,
             normal_alignments=normal_alignments,
@@ -630,7 +644,7 @@ def _build_annotation_rows_with_normals(
     )
 
 
-def annotate_snv_vcf_to_json_with_normals(
+def annotate_vcf_to_json_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -642,7 +656,7 @@ def annotate_snv_vcf_to_json_with_normals(
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> str:
-    """Run PON SNV annotation from VCF and return JSON output, optionally writing to file."""
+    """Run PON variant annotation from VCF and return JSON output, optionally writing to file."""
     if normal_alignments is None:
         normal_alignments = []
 

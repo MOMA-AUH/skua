@@ -1,9 +1,9 @@
-from skua.evidence import UnusableReason, collect_snv_evidence_from_alignment
+from skua.evidence import UnusableReason, collect_evidence_from_alignment
 from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 
 
 
-def test_collect_snv_evidence_from_alignment_fetches_one_locus_window() -> None:
+def test_collect_evidence_from_alignment_fetches_one_locus_window() -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -15,7 +15,7 @@ def test_collect_snv_evidence_from_alignment_fetches_one_locus_window() -> None:
     ]
     alignment_file = FakeAlignmentFile(reads)
 
-    counts = collect_snv_evidence_from_alignment(
+    counts = collect_evidence_from_alignment(
         alignment_file,
         contig="chr7",
         ref_pos0=105,
@@ -31,7 +31,7 @@ def test_collect_snv_evidence_from_alignment_fetches_one_locus_window() -> None:
 
 
 
-def test_collect_snv_evidence_from_alignment_propagates_mixed_counts() -> None:
+def test_collect_evidence_from_alignment_propagates_mixed_counts() -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -57,7 +57,7 @@ def test_collect_snv_evidence_from_alignment_propagates_mixed_counts() -> None:
     ]
     alignment_file = FakeAlignmentFile(reads)
 
-    counts = collect_snv_evidence_from_alignment(
+    counts = collect_evidence_from_alignment(
         alignment_file,
         contig="chr1",
         ref_pos0=105,

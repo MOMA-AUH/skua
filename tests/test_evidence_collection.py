@@ -1,9 +1,9 @@
-from skua.evidence import UnusableReason, collect_snv_evidence
+from skua.evidence import UnusableReason, collect_evidence
 from tests.helpers import FakeRead, build_linear_pairs
 
 
 
-def test_collect_snv_evidence_combines_classification_and_aggregation() -> None:
+def test_collect_evidence_combines_classification_and_aggregation() -> None:
     reads = [
         FakeRead(
             mapping_quality=60,
@@ -28,7 +28,7 @@ def test_collect_snv_evidence_combines_classification_and_aggregation() -> None:
         ),
     ]
 
-    counts = collect_snv_evidence(
+    counts = collect_evidence(
         reads,
         ref_pos0=105,
         ref_base="A",
@@ -46,7 +46,7 @@ def test_collect_snv_evidence_combines_classification_and_aggregation() -> None:
 
 
 
-def test_collect_snv_evidence_propagates_unusable_reason_counts() -> None:
+def test_collect_evidence_propagates_unusable_reason_counts() -> None:
     reads = [
         FakeRead(
             mapping_quality=5,
@@ -71,7 +71,7 @@ def test_collect_snv_evidence_propagates_unusable_reason_counts() -> None:
         ),
     ]
 
-    counts = collect_snv_evidence(
+    counts = collect_evidence(
         reads,
         ref_pos0=105,
         ref_base="A",
@@ -92,8 +92,8 @@ def test_collect_snv_evidence_propagates_unusable_reason_counts() -> None:
 
 
 
-def test_collect_snv_evidence_handles_empty_reads() -> None:
-    counts = collect_snv_evidence(
+def test_collect_evidence_handles_empty_reads() -> None:
+    counts = collect_evidence(
         [],
         ref_pos0=105,
         ref_base="A",

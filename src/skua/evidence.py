@@ -26,7 +26,7 @@ class UnusableReason(str, Enum):
 
 @dataclass(frozen=True)
 class ReadAlleleCall:
-    """Result of classifying one read at one SNV locus."""
+    """Result of classifying one read at one variant locus."""
 
     support: AlleleSupport
     is_reverse: bool
@@ -297,7 +297,7 @@ def aggregate_read_calls(calls: Iterable[ReadAlleleCall]) -> AggregatedEvidence:
     )
 
 
-def collect_snv_evidence(
+def collect_evidence(
     reads: Iterable[Any],
     *,
     ref_pos0: int,
@@ -321,7 +321,7 @@ def collect_snv_evidence(
     return aggregate_read_calls(calls)
 
 
-def collect_snv_evidence_from_alignment(
+def collect_evidence_from_alignment(
     alignment_file: Any,
     *,
     contig: str,
@@ -333,7 +333,7 @@ def collect_snv_evidence_from_alignment(
 ) -> AggregatedEvidence:
     """Fetch overlapping reads for one variant and collect strand-aware evidence."""
     reads = alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
-    return collect_snv_evidence(
+    return collect_evidence(
         reads,
         ref_pos0=ref_pos0,
         ref_base=ref_base,

@@ -2,7 +2,7 @@
 
 [![Conda Version](https://img.shields.io/conda/vn/MOMA-AUH/skua?cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua) [![Conda Downloads](https://img.shields.io/conda/dn/MOMA-AUH/skua?cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua)
 
-Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads with support for SNV, MNV, and INDEL variants. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
+Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads, with support for substitutions, MNVs, and simple insertions and deletions. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
 ## Installation
 
@@ -59,6 +59,32 @@ Output INFO fields:
 - `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`: Aggregated read counts across normals
 - `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE`: Aggregated usable/unusable counts
 - `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
+
+## Python API
+
+The supported library API is available directly from `skua`. It accepts
+substitutions, MNVs, and simple insertions and deletions.
+
+```python
+import pysam
+from skua import Variant, annotate_variant, annotate_variant_with_normals
+
+variant = Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")
+
+with pysam.AlignmentFile("case.bam", "rb") as case_bam:
+    evidence = annotate_variant(case_bam, variant)
+    print(evidence.alt_forward, evidence.alt_reverse)
+
+    with pysam.AlignmentFile("normal.bam", "rb") as normal_bam:
+        annotation = annotate_variant_with_normals(
+            case_bam, variant, normal_alignments=[normal_bam]
+        )
+        print(annotation.case_evidence.usable)
+```
+
+For batch work, open each alignment once and use
+`annotate_variants_from_vcf()`; this avoids repeatedly opening the same BAM or
+CRAM.
 
 ## Requirements
 

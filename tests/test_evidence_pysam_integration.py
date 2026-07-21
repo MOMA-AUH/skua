@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pysam
 
-from skua.evidence import UnusableReason, collect_snv_evidence_from_alignment
+from skua.evidence import UnusableReason, collect_evidence_from_alignment
 
 
 HEADER = {
@@ -45,7 +45,7 @@ def create_test_bam(tmp_path: Path, reads: list[pysam.AlignedSegment]) -> Path:
 
 
 
-def test_collect_snv_evidence_from_alignment_with_real_bam(tmp_path: Path) -> None:
+def test_collect_evidence_from_alignment_with_real_bam(tmp_path: Path) -> None:
     bam_path = create_test_bam(
         tmp_path,
         [
@@ -71,7 +71,7 @@ def test_collect_snv_evidence_from_alignment_with_real_bam(tmp_path: Path) -> No
     )
 
     with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
-        counts = collect_snv_evidence_from_alignment(
+        counts = collect_evidence_from_alignment(
             alignment_file,
             contig="chr1",
             ref_pos0=105,
@@ -90,7 +90,7 @@ def test_collect_snv_evidence_from_alignment_with_real_bam(tmp_path: Path) -> No
 
 
 
-def test_collect_snv_evidence_from_alignment_tracks_real_bam_unusable_reads(tmp_path: Path) -> None:
+def test_collect_evidence_from_alignment_tracks_real_bam_unusable_reads(tmp_path: Path) -> None:
     low_mapq = build_aligned_segment(
         query_name="low_mapq",
         query_sequence="AAAAATAAAA",
@@ -112,7 +112,7 @@ def test_collect_snv_evidence_from_alignment_tracks_real_bam_unusable_reads(tmp_
     bam_path = create_test_bam(tmp_path, [low_mapq, invalid_base, low_baseq])
 
     with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
-        counts = collect_snv_evidence_from_alignment(
+        counts = collect_evidence_from_alignment(
             alignment_file,
             contig="chr1",
             ref_pos0=105,

@@ -8,7 +8,7 @@ import pysam
 
 from . import __version__
 from .core import (
-    annotate_snv_vcf_with_normals,
+    annotate_vcf_with_normals,
 )
 
 
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.pseudocount is not None:
                 pon_kwargs["pseudocount"] = args.pseudocount
-            payload = annotate_snv_vcf_with_normals(
+            payload = annotate_vcf_with_normals(
                 alignment_file,
                 Path(args.vcf),
                 normal_alignments=normal_alignments,
