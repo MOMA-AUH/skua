@@ -1,4 +1,16 @@
 import skua.cli as cli
+from skua import __version__
+
+
+def test_main_version_prints_version_and_exits_successfully(capsys) -> None:
+    try:
+        cli.main(["--version"])
+    except SystemExit as exc:
+        assert exc.code == 0
+    else:
+        raise AssertionError("Expected SystemExit for --version")
+
+    assert capsys.readouterr().out == f"{__version__}\n"
 
 
 def test_main_annotate_requires_normal_list(capsys) -> None:

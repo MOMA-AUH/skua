@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pysam
 
+from . import __version__
 from .core import (
     annotate_snv_vcf_with_normals,
 )
@@ -33,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="skua",
         formatter_class=OptionalDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=__version__,
+        help="Show the skua version and exit",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
