@@ -336,7 +336,17 @@ def classify_variant_read(
                 )
             deletion_query_positions.append(ref_to_query[target_ref_pos])
 
-        support = AlleleSupport.ALT if all(query_pos is None for query_pos in deletion_query_positions) and anchor_bases == ref_base[:1] else AlleleSupport.NON_ALT
+        next_ref_pos = ref_pos0 + ref_len
+        deletion_extends_beyond_variant = (
+            next_ref_pos in ref_to_query and ref_to_query[next_ref_pos] is None
+        )
+        support = (
+            AlleleSupport.ALT
+            if all(query_pos is None for query_pos in deletion_query_positions)
+            and not deletion_extends_beyond_variant
+            and anchor_bases == ref_base[:1]
+            else AlleleSupport.NON_ALT
+        )
         return ReadAlleleCall(
             support=support,
             is_reverse=read.is_reverse,

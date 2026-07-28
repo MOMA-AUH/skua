@@ -241,3 +241,35 @@ def test_classify_simple_deletion_as_alt() -> None:
     assert call.support == AlleleSupport.ALT
     assert call.reason is None
     assert call.observed_base == "AT"
+
+
+def test_classify_larger_deletion_as_non_alt() -> None:
+    read = FakeRead(
+        mapping_quality=60,
+        is_reverse=False,
+        query_sequence="AAAAAAA",
+        query_qualities=[35] * 7,
+        aligned_pairs=[
+            (0, 100),
+            (None, 101),
+            (None, 102),
+            (1, 103),
+            (2, 104),
+            (3, 105),
+            (4, 106),
+            (5, 107),
+            (6, 108),
+        ],
+    )
+
+    call = classify_variant_read(
+        read,
+        ref_pos0=100,
+        ref_base="AT",
+        alt_base="A",
+        min_baseq=20,
+        min_mapq=20,
+    )
+
+    assert call.support == AlleleSupport.NON_ALT
+    assert call.reason is None

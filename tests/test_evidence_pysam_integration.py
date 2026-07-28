@@ -18,6 +18,7 @@ def build_aligned_segment(
     mapping_quality: int = 60,
     is_reverse: bool = False,
     flag: int | None = None,
+    cigar: tuple[tuple[int, int], ...] | None = None,
 ) -> pysam.AlignedSegment:
     segment = pysam.AlignedSegment()
     segment.query_name = query_name
@@ -26,7 +27,7 @@ def build_aligned_segment(
     segment.reference_id = 0
     segment.reference_start = reference_start
     segment.mapping_quality = mapping_quality
-    segment.cigar = ((0, len(query_sequence)),)
+    segment.cigar = cigar if cigar is not None else ((0, len(query_sequence)),)
     segment.next_reference_id = 0
     segment.next_reference_start = reference_start
     segment.template_length = -len(query_sequence) if is_reverse else len(query_sequence)
@@ -343,3 +344,40 @@ def test_collect_evidence_from_alignment_counts_two_unusable_mates_once(
 
     assert counts.usable == 0
     assert counts.unusable == 1
+
+
+def test_collect_evidence_from_alignment_requires_exact_deletion_length(
+    tmp_path: Path,
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="exact_deletion",
+                query_sequence="AAAAAAAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+                cigar=((0, 5), (2, 1), (0, 5)),  # 5M1D5M: exact 1-base deletion.
+            ),
+            build_aligned_segment(
+                query_name="larger_deletion",
+                query_sequence="AAAAAAAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+                cigar=((0, 5), (2, 2), (0, 5)),  # 5M2D5M: deletion is too long.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=104,
+            ref_base="AT",
+            alt_base="A",
+        )
+
+    assert counts.alt_forward == 1
+    assert counts.non_alt_forward == 1
+    assert counts.usable == 2
