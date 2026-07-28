@@ -45,10 +45,11 @@ Other optional parameters:
 Alignment records must be mapped primary records from a proper pair. Records
 whose mate is unmapped, or which are marked secondary, supplementary, failed
 quality control, or duplicate, are excluded before evidence classification. If
-both mates overlap a variant, only one record is counted for their shared query
-name. Agreeing usable mates count once on the first mate's strand; one usable
-mate takes precedence over an unusable mate; conflicting usable mates count
-once as unusable; and two unusable mates count once as unusable.
+both mates overlap a variant, only one record is counted for their shared read
+group and query name. Agreeing usable mates count once on the first mate's
+strand; one usable mate takes precedence over an unusable mate; conflicting
+usable mates count once as unusable; and two unusable mates count once as
+unusable.
 
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 

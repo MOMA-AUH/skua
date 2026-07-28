@@ -60,18 +60,27 @@ def is_accepted_sam_flag(flag: int) -> bool:
     )
 
 
+def _read_group_id(read: Any) -> str | None:
+    """Return the alignment record's read-group ID when present."""
+    has_tag = getattr(read, "has_tag", None)
+    if has_tag is None or not has_tag("RG"):
+        return None
+    return str(read.get_tag("RG"))
+
+
 def _group_reads_by_fragment(reads: Iterable[Any]) -> Iterable[list[Any]]:
-    """Group overlapping alignment records by query name."""
-    reads_by_query_name: dict[str, list[Any]] = {}
+    """Group overlapping alignment records by read group and query name."""
+    reads_by_fragment: dict[tuple[str | None, str], list[Any]] = {}
     unnamed_reads: list[Any] = []
     for read in reads:
         query_name = getattr(read, "query_name", None)
         if query_name is None:
             unnamed_reads.append(read)
             continue
-        reads_by_query_name.setdefault(query_name, []).append(read)
+        fragment_key = (_read_group_id(read), query_name)
+        reads_by_fragment.setdefault(fragment_key, []).append(read)
 
-    yield from reads_by_query_name.values()
+    yield from reads_by_fragment.values()
     for read in unnamed_reads:
         yield [read]
 

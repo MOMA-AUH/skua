@@ -8,6 +8,10 @@ from skua.evidence import UnusableReason, collect_evidence_from_alignment
 HEADER = {
     "HD": {"VN": "1.6", "SO": "coordinate"},
     "SQ": [{"SN": "chr1", "LN": 1000}],
+    "RG": [
+        {"ID": "rg1", "SM": "sample"},
+        {"ID": "rg2", "SM": "sample"},
+    ],
 }
 
 def build_aligned_segment(
@@ -19,6 +23,7 @@ def build_aligned_segment(
     is_reverse: bool = False,
     flag: int | None = None,
     cigar: tuple[tuple[int, int], ...] | None = None,
+    read_group: str | None = None,
 ) -> pysam.AlignedSegment:
     segment = pysam.AlignedSegment()
     segment.query_name = query_name
@@ -32,6 +37,8 @@ def build_aligned_segment(
     segment.next_reference_start = reference_start
     segment.template_length = -len(query_sequence) if is_reverse else len(query_sequence)
     segment.query_qualities = pysam.qualitystring_to_array("I" * len(query_sequence))
+    if read_group is not None:
+        segment.set_tag("RG", read_group)
     return segment
 
 
@@ -213,12 +220,14 @@ def test_collect_evidence_from_alignment_counts_overlapping_mates_once(tmp_path:
                 query_sequence="AAAAATAAAA",
                 reference_start=100,
                 flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+                read_group="rg1",
             ),
             build_aligned_segment(
                 query_name="same_fragment",
                 query_sequence="AAAAAATAAA",
                 reference_start=99,
                 flag=147,  # 0x93: primary, mapped, second mate in a proper pair.
+                read_group="rg1",
             ),
         ],
     )
@@ -381,3 +390,41 @@ def test_collect_evidence_from_alignment_requires_exact_deletion_length(
     assert counts.alt_forward == 1
     assert counts.non_alt_forward == 1
     assert counts.usable == 2
+
+
+def test_collect_evidence_from_alignment_scopes_query_names_to_read_group(
+    tmp_path: Path,
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="reused_name",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+                read_group="rg1",
+            ),
+            build_aligned_segment(
+                query_name="reused_name",
+                query_sequence="AAAAAAAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: a different fragment in another read group.
+                read_group="rg2",
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 1
+    assert counts.non_alt_forward == 1
+    assert counts.usable == 2
+    assert counts.unusable == 0
