@@ -17,15 +17,19 @@ def build_aligned_segment(
     reference_start: int,
     mapping_quality: int = 60,
     is_reverse: bool = False,
+    flag: int | None = None,
 ) -> pysam.AlignedSegment:
     segment = pysam.AlignedSegment()
     segment.query_name = query_name
     segment.query_sequence = query_sequence
-    segment.flag = 16 if is_reverse else 0
+    segment.flag = flag if flag is not None else (147 if is_reverse else 99)
     segment.reference_id = 0
     segment.reference_start = reference_start
     segment.mapping_quality = mapping_quality
     segment.cigar = ((0, len(query_sequence)),)
+    segment.next_reference_id = 0
+    segment.next_reference_start = reference_start
+    segment.template_length = -len(query_sequence) if is_reverse else len(query_sequence)
     segment.query_qualities = pysam.qualitystring_to_array("I" * len(query_sequence))
     return segment
 
@@ -131,3 +135,69 @@ def test_collect_evidence_from_alignment_tracks_real_bam_unusable_reads(tmp_path
     assert counts.unusable_by_reason[UnusableReason.LOW_MAPQ] == 1
     assert counts.unusable_by_reason[UnusableReason.INVALID_BASE] == 1
     assert counts.unusable_by_reason[UnusableReason.LOW_BASEQ] == 1
+
+
+def test_collect_evidence_from_alignment_excludes_rejected_sam_flags(tmp_path: Path) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="accepted",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+            ),
+            build_aligned_segment(
+                query_name="unpaired",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=0,  # No SAM flags: mapped but unpaired.
+            ),
+            build_aligned_segment(
+                query_name="improper_pair",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=65,  # 0x41: paired first mate, but not a proper pair.
+            ),
+            build_aligned_segment(
+                query_name="secondary",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99 | 0x100,  # Add SECONDARY.
+            ),
+            build_aligned_segment(
+                query_name="qc_fail",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99 | 0x200,  # Add failed quality-control checks.
+            ),
+            build_aligned_segment(
+                query_name="duplicate",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99 | 0x400,  # Add PCR/optical DUPLICATE.
+            ),
+            build_aligned_segment(
+                query_name="supplementary",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99 | 0x800,  # Add SUPPLEMENTARY.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 1
+    assert counts.alt_reverse == 0
+    assert counts.non_alt_forward == 0
+    assert counts.non_alt_reverse == 0
+    assert counts.usable == 1
+    assert counts.unusable == 0

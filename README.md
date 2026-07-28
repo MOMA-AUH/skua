@@ -42,6 +42,10 @@ Other optional parameters:
 - `--pseudocount` (default `sys.float_info.epsilon`): Pseudocount for beta-binomial rate estimates
 - `--prior-variant-probability` (default `0.5`): Prior probability for variant model
 
+Alignment records must be mapped primary records from a proper pair. Records
+whose mate is unmapped, or which are marked secondary, supplementary, failed
+quality control, or duplicate, are excluded before evidence classification.
+
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
 Output FORMAT fields:

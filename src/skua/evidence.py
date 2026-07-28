@@ -3,7 +3,7 @@
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, IntFlag
 from typing import Any
 
 
@@ -22,6 +22,39 @@ class UnusableReason(str, Enum):
     LOW_BASEQ = "low_baseq"
     NO_BASE_AT_SITE = "no_base_at_site"
     INVALID_BASE = "invalid_base"
+
+
+class SamFlag(IntFlag):
+    """SAM flag bits used by the alignment-record acceptance policy."""
+
+    PAIRED = 0x1
+    PROPER_PAIR = 0x2
+    UNMAPPED = 0x4
+    MATE_UNMAPPED = 0x8
+    SECONDARY = 0x100
+    QC_FAIL = 0x200
+    DUPLICATE = 0x400
+    SUPPLEMENTARY = 0x800
+
+
+REQUIRED_SAM_FLAGS = SamFlag.PAIRED | SamFlag.PROPER_PAIR
+REJECTED_SAM_FLAGS = (
+    SamFlag.UNMAPPED
+    | SamFlag.MATE_UNMAPPED
+    | SamFlag.SECONDARY
+    | SamFlag.QC_FAIL
+    | SamFlag.DUPLICATE
+    | SamFlag.SUPPLEMENTARY
+)
+
+
+def is_accepted_sam_flag(flag: int) -> bool:
+    """Return whether a SAM flag identifies a primary, usable proper-pair record."""
+    sam_flag = SamFlag(flag)
+    return (
+        sam_flag & REQUIRED_SAM_FLAGS == REQUIRED_SAM_FLAGS
+        and not sam_flag & REJECTED_SAM_FLAGS
+    )
 
 
 @dataclass(frozen=True)
@@ -332,7 +365,11 @@ def collect_evidence_from_alignment(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Fetch overlapping reads for one variant and collect strand-aware evidence."""
-    reads = alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
+    reads = (
+        read
+        for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
+        if is_accepted_sam_flag(read.flag)
+    )
     return collect_evidence(
         reads,
         ref_pos0=ref_pos0,
