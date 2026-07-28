@@ -215,8 +215,8 @@ def test_collect_evidence_from_alignment_counts_overlapping_mates_once(tmp_path:
             ),
             build_aligned_segment(
                 query_name="same_fragment",
-                query_sequence="AAAAATAAAA",
-                reference_start=100,
+                query_sequence="AAAAAATAAA",
+                reference_start=99,
                 flag=147,  # 0x93: primary, mapped, second mate in a proper pair.
             ),
         ],
@@ -231,6 +231,115 @@ def test_collect_evidence_from_alignment_counts_overlapping_mates_once(tmp_path:
             alt_base="T",
         )
 
-    assert counts.alt_forward + counts.alt_reverse == 1
+    # The second mate is leftmost and fetched first, but the first mate defines
+    # the fragment strand when both calls agree.
+    assert counts.alt_forward == 1
+    assert counts.alt_reverse == 0
     assert counts.usable == 1
     assert counts.unusable == 0
+
+
+def test_collect_evidence_from_alignment_marks_conflicting_mates_unusable(
+    tmp_path: Path,
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="conflicting_fragment",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: first mate supports ALT.
+            ),
+            build_aligned_segment(
+                query_name="conflicting_fragment",
+                query_sequence="AAAAAAAAAA",
+                reference_start=99,
+                flag=147,  # 0x93: second mate supports the reference allele.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 0
+    assert counts.alt_reverse == 0
+    assert counts.non_alt_forward == 0
+    assert counts.non_alt_reverse == 0
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason[UnusableReason.CONFLICTING_MATES] == 1
+
+
+def test_collect_evidence_from_alignment_uses_usable_mate(tmp_path: Path) -> None:
+    usable_first_mate = build_aligned_segment(
+        query_name="partly_usable_fragment",
+        query_sequence="AAAAATAAAA",
+        reference_start=100,
+        flag=99,  # 0x63: first mate supports ALT.
+    )
+    unusable_second_mate = build_aligned_segment(
+        query_name="partly_usable_fragment",
+        query_sequence="AAAAAATAAA",
+        reference_start=99,
+        flag=147,  # 0x93: second mate has low base quality at the variant.
+    )
+    second_mate_qualities = unusable_second_mate.query_qualities
+    second_mate_qualities[6] = 10
+    unusable_second_mate.query_qualities = second_mate_qualities
+    bam_path = create_test_bam(tmp_path, [usable_first_mate, unusable_second_mate])
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 1
+    assert counts.alt_reverse == 0
+    assert counts.usable == 1
+    assert counts.unusable == 0
+
+
+def test_collect_evidence_from_alignment_counts_two_unusable_mates_once(
+    tmp_path: Path,
+) -> None:
+    first_mate = build_aligned_segment(
+        query_name="unusable_fragment",
+        query_sequence="AAAAATAAAA",
+        reference_start=100,
+        mapping_quality=5,
+        flag=99,  # 0x63: first mate has low mapping quality.
+    )
+    second_mate = build_aligned_segment(
+        query_name="unusable_fragment",
+        query_sequence="AAAAAATAAA",
+        reference_start=99,
+        flag=147,  # 0x93: second mate has low base quality at the variant.
+    )
+    second_mate_qualities = second_mate.query_qualities
+    second_mate_qualities[6] = 10
+    second_mate.query_qualities = second_mate_qualities
+    bam_path = create_test_bam(tmp_path, [first_mate, second_mate])
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.usable == 0
+    assert counts.unusable == 1

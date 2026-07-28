@@ -22,6 +22,7 @@ class UnusableReason(str, Enum):
     LOW_BASEQ = "low_baseq"
     NO_BASE_AT_SITE = "no_base_at_site"
     INVALID_BASE = "invalid_base"
+    CONFLICTING_MATES = "conflicting_mates"
 
 
 class SamFlag(IntFlag):
@@ -31,6 +32,8 @@ class SamFlag(IntFlag):
     PROPER_PAIR = 0x2
     UNMAPPED = 0x4
     MATE_UNMAPPED = 0x8
+    FIRST_IN_PAIR = 0x40
+    SECOND_IN_PAIR = 0x80
     SECONDARY = 0x100
     QC_FAIL = 0x200
     DUPLICATE = 0x400
@@ -57,18 +60,20 @@ def is_accepted_sam_flag(flag: int) -> bool:
     )
 
 
-def _one_read_per_fragment(reads: Iterable[Any]) -> Iterable[Any]:
-    """Yield at most one overlapping alignment record for each query name."""
-    seen_query_names: set[str] = set()
+def _group_reads_by_fragment(reads: Iterable[Any]) -> Iterable[list[Any]]:
+    """Group overlapping alignment records by query name."""
+    reads_by_query_name: dict[str, list[Any]] = {}
+    unnamed_reads: list[Any] = []
     for read in reads:
         query_name = getattr(read, "query_name", None)
         if query_name is None:
-            yield read
+            unnamed_reads.append(read)
             continue
-        if query_name in seen_query_names:
-            continue
-        seen_query_names.add(query_name)
-        yield read
+        reads_by_query_name.setdefault(query_name, []).append(read)
+
+    yield from reads_by_query_name.values()
+    for read in unnamed_reads:
+        yield [read]
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,46 @@ class AggregatedEvidence:
     usable: int
     unusable: int
     unusable_by_reason: dict[UnusableReason, int]
+
+
+def _preferred_mate(
+    read_calls: list[tuple[Any, ReadAlleleCall]],
+) -> tuple[Any, ReadAlleleCall]:
+    """Choose the first mate as the stable fragment representative when present."""
+    return min(
+        read_calls,
+        key=lambda read_call: not (
+            SamFlag(getattr(read_call[0], "flag", 0)) & SamFlag.FIRST_IN_PAIR
+        ),
+    )
+
+
+def _resolve_fragment_call(
+    read_calls: list[tuple[Any, ReadAlleleCall]],
+) -> ReadAlleleCall:
+    """Resolve all overlapping mate calls into one fragment-level observation."""
+    usable_read_calls = [
+        read_call
+        for read_call in read_calls
+        if read_call[1].support != AlleleSupport.UNUSABLE
+    ]
+
+    if not usable_read_calls:
+        return _preferred_mate(read_calls)[1]
+
+    if len(usable_read_calls) == 1:
+        return usable_read_calls[0][1]
+
+    supports = {call.support for _read, call in usable_read_calls}
+    if len(supports) > 1:
+        _read, representative = _preferred_mate(usable_read_calls)
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=representative.is_reverse,
+            reason=UnusableReason.CONFLICTING_MATES,
+        )
+
+    return _preferred_mate(usable_read_calls)[1]
 
 
 def _query_position_bases_and_qualities(read: Any, query_positions: list[int], *, min_baseq: int) -> tuple[str | None, UnusableReason | None, str | None]:
@@ -379,16 +424,27 @@ def collect_evidence_from_alignment(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Fetch overlapping reads for one variant and collect strand-aware evidence."""
-    reads = _one_read_per_fragment(
+    reads = (
         read
         for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
         if is_accepted_sam_flag(read.flag)
     )
-    return collect_evidence(
-        reads,
-        ref_pos0=ref_pos0,
-        ref_base=ref_base,
-        alt_base=alt_base,
-        min_baseq=min_baseq,
-        min_mapq=min_mapq,
-    )
+    fragment_calls: list[ReadAlleleCall] = []
+    for fragment_reads in _group_reads_by_fragment(reads):
+        read_calls = [
+            (
+                read,
+                classify_variant_read(
+                    read,
+                    ref_pos0=ref_pos0,
+                    ref_base=ref_base,
+                    alt_base=alt_base,
+                    min_baseq=min_baseq,
+                    min_mapq=min_mapq,
+                ),
+            )
+            for read in fragment_reads
+        ]
+        fragment_calls.append(_resolve_fragment_call(read_calls))
+
+    return aggregate_read_calls(fragment_calls)
