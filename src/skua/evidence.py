@@ -57,6 +57,20 @@ def is_accepted_sam_flag(flag: int) -> bool:
     )
 
 
+def _one_read_per_fragment(reads: Iterable[Any]) -> Iterable[Any]:
+    """Yield at most one overlapping alignment record for each query name."""
+    seen_query_names: set[str] = set()
+    for read in reads:
+        query_name = getattr(read, "query_name", None)
+        if query_name is None:
+            yield read
+            continue
+        if query_name in seen_query_names:
+            continue
+        seen_query_names.add(query_name)
+        yield read
+
+
 @dataclass(frozen=True)
 class ReadAlleleCall:
     """Result of classifying one read at one variant locus."""
@@ -341,7 +355,7 @@ def collect_evidence(
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one variant from an iterable of reads."""
     calls = [
-            classify_variant_read(
+        classify_variant_read(
             read,
             ref_pos0=ref_pos0,
             ref_base=ref_base,
@@ -365,7 +379,7 @@ def collect_evidence_from_alignment(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Fetch overlapping reads for one variant and collect strand-aware evidence."""
-    reads = (
+    reads = _one_read_per_fragment(
         read
         for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
         if is_accepted_sam_flag(read.flag)

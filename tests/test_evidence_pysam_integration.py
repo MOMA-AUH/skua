@@ -201,3 +201,36 @@ def test_collect_evidence_from_alignment_excludes_rejected_sam_flags(tmp_path: P
     assert counts.non_alt_reverse == 0
     assert counts.usable == 1
     assert counts.unusable == 0
+
+
+def test_collect_evidence_from_alignment_counts_overlapping_mates_once(tmp_path: Path) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="same_fragment",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=99,  # 0x63: primary, mapped, first mate in a proper pair.
+            ),
+            build_aligned_segment(
+                query_name="same_fragment",
+                query_sequence="AAAAATAAAA",
+                reference_start=100,
+                flag=147,  # 0x93: primary, mapped, second mate in a proper pair.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward + counts.alt_reverse == 1
+    assert counts.usable == 1
+    assert counts.unusable == 0
