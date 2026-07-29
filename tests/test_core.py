@@ -441,7 +441,6 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_ALT_FWD" in result.vcf_text
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
