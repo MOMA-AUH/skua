@@ -2,7 +2,8 @@
 
 import gzip
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 import sys
 import tempfile
@@ -42,6 +43,73 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_PON_UNUSABLE", "Integer", "PON unusable reads after truncation"),
     ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
 )
+
+ANNOTATION_STATUS_INFO_FIELD_DEFINITION = (
+    "SKUA_STATUS",
+    "String",
+    "Skua annotation status for this VCF record",
+)
+
+
+class AnnotationStatus(str, Enum):
+    """Outcome of attempting to annotate one VCF record."""
+
+    ANNOTATED = "ANNOTATED"
+    UNSUPPORTED_MULTIALLELIC = "UNSUPPORTED_MULTIALLELIC"
+    UNSUPPORTED_SYMBOLIC_ALLELE = "UNSUPPORTED_SYMBOLIC_ALLELE"
+    UNSUPPORTED_BREAKEND = "UNSUPPORTED_BREAKEND"
+    UNSUPPORTED_SPANNING_DELETION = "UNSUPPORTED_SPANNING_DELETION"
+    UNSUPPORTED_COMPLEX_ALLELE = "UNSUPPORTED_COMPLEX_ALLELE"
+    UNSUPPORTED_NON_STANDARD_ALLELE = "UNSUPPORTED_NON_STANDARD_ALLELE"
+
+
+@dataclass(frozen=True)
+class VcfRecordAnnotation:
+    """Supported variant or explicit reason why a VCF record was not annotated."""
+
+    status: AnnotationStatus
+    variant: Variant | None
+
+
+@dataclass
+class AnnotationSummary:
+    """Counts of VCF records processed during one Skua annotation run."""
+
+    record_count: int = 0
+    annotated_record_count: int = 0
+    unsupported_record_count_by_status: dict[AnnotationStatus, int] = field(default_factory=dict)
+
+    def record(self, status: AnnotationStatus) -> None:
+        """Record one VCF annotation outcome."""
+        self.record_count += 1
+        if status == AnnotationStatus.ANNOTATED:
+            self.annotated_record_count += 1
+            return
+        self.unsupported_record_count_by_status[status] = (
+            self.unsupported_record_count_by_status.get(status, 0) + 1
+        )
+
+    @property
+    def unsupported_record_count(self) -> int:
+        """Return the number of records not annotated by Skua."""
+        return self.record_count - self.annotated_record_count
+
+    def format_for_cli(self) -> str:
+        """Render a concise, deterministic command-line summary."""
+        message = (
+            f"skua: records={self.record_count} annotated={self.annotated_record_count} "
+            f"unsupported={self.unsupported_record_count}"
+        )
+        if not self.unsupported_record_count_by_status:
+            return message
+        details = ", ".join(
+            f"{status.value}={count}"
+            for status, count in sorted(
+                self.unsupported_record_count_by_status.items(),
+                key=lambda item: item[0].value,
+            )
+        )
+        return f"{message} ({details})"
 
 
 @dataclass(frozen=True)
@@ -237,6 +305,7 @@ def _validate_vcf_against_inputs(
     *,
     alignment_files: list[tuple[str, Any]],
     reference_path: str | Path | None,
+    strict: bool = False,
 ) -> None:
     """Validate supported VCF records against alignment contigs and an optional FASTA."""
     _validate_alignment_indexes(alignment_files)
@@ -256,7 +325,13 @@ def _validate_vcf_against_inputs(
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             for record in source_vcf:
-                variant = _variant_from_vcf_record(record)
+                assessment = _assess_vcf_record(record)
+                if strict and assessment.status != AnnotationStatus.ANNOTATED:
+                    raise ValueError(
+                        f"Unsupported VCF record at {record.contig}:{record.pos}: "
+                        f"{assessment.status.value}"
+                    )
+                variant = assessment.variant
                 if variant is None:
                     continue
 
@@ -294,6 +369,13 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
                 f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="{description}">'
             )
 
+    status_field_id, status_field_type, status_description = ANNOTATION_STATUS_INFO_FIELD_DEFINITION
+    if status_field_id not in annotated_header.info:
+        annotated_header.add_line(
+            f'##INFO=<ID={status_field_id},Number=1,Type={status_field_type},'
+            f'Description="{status_description}">'
+        )
+
     if include_pon_info:
         for field_id, field_type, description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS:
             if field_id not in annotated_header.formats:
@@ -310,21 +392,37 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
     return annotated_header
 
 
-def _variant_from_vcf_record(record: Any) -> Variant | None:
-    """Build a Variant from a pysam VCF record when supported, else None."""
-    if len(record.alts or ()) != 1:
-        return None
+def _assess_vcf_record(record: Any) -> VcfRecordAnnotation:
+    """Return a supported variant or an explicit unsupported-record status."""
+    alts = record.alts or ()
+    if len(alts) != 1:
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_MULTIALLELIC, None)
 
-    alt = record.alts[0]
+    alt = alts[0]
+    if alt == "*":
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_SPANNING_DELETION, None)
+    if alt.startswith("<") and alt.endswith(">"):
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_SYMBOLIC_ALLELE, None)
+    if "[" in alt or "]" in alt:
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_BREAKEND, None)
+    if any(base not in {"A", "C", "G", "T"} for base in record.ref.upper() + alt.upper()):
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_NON_STANDARD_ALLELE, None)
+
     try:
-        return Variant.from_vcf_fields(
+        variant = Variant.from_vcf_fields(
             contig=record.contig,
             pos1=record.pos,
             ref=record.ref,
             alt=alt,
         )
     except ValueError:
-        return None
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_COMPLEX_ALLELE, None)
+    return VcfRecordAnnotation(AnnotationStatus.ANNOTATED, variant)
+
+
+def _variant_from_vcf_record(record: Any) -> Variant | None:
+    """Build a Variant from a pysam VCF record when supported, else None."""
+    return _assess_vcf_record(record).variant
 
 
 def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
@@ -395,6 +493,7 @@ def annotate_vcf(
     output_path: str | Path | None = None,
     sample_name: str | None = None,
     reference_path: str | Path | None = None,
+    strict: bool = False,
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
@@ -404,6 +503,7 @@ def annotate_vcf(
         vcf_path,
         alignment_files=[("Case alignment", alignment_file)],
         reference_path=reference_path,
+        strict=strict,
     )
 
     destination_path: Path
@@ -437,11 +537,12 @@ def annotate_vcf(
                 for record in source_vcf:
                     if site_only_sample_name is not None:
                         record = _copy_vcf_record_with_sample(record, out_vcf)
-                    variant = _variant_from_vcf_record(record)
-                    if variant is not None:
+                    assessment = _assess_vcf_record(record)
+                    record.info["SKUA_STATUS"] = assessment.status.value
+                    if assessment.variant is not None:
                         evidence = annotate_variant(
                             alignment_file,
-                            variant,
+                            assessment.variant,
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
                             allowed_read_group_ids=case_selection.allowed_read_group_ids,
@@ -459,7 +560,7 @@ def annotate_vcf(
             destination_path.unlink()
 
 
-def annotate_vcf_with_normals(
+def annotate_vcf_with_normals_with_summary(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -467,13 +568,14 @@ def annotate_vcf_with_normals(
     output_path: str | Path | None = None,
     sample_name: str | None = None,
     reference_path: str | Path | None = None,
+    strict: bool = False,
     min_baseq: int = 20,
     min_mapq: int = 20,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
-) -> str:
-    """Annotate an input VCF with read-count FORMAT and PON INFO fields for variants."""
+) -> tuple[str, AnnotationSummary]:
+    """Annotate an input VCF and return its rendered payload and record summary."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -493,6 +595,7 @@ def annotate_vcf_with_normals(
             for index, normal_alignment in enumerate(normal_alignments, start=1)
         ],
         reference_path=reference_path,
+        strict=strict,
     )
 
     destination_path: Path
@@ -505,6 +608,7 @@ def annotate_vcf_with_normals(
     else:
         destination_path = Path(output_path)
 
+    summary = AnnotationSummary()
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=True)
@@ -526,11 +630,13 @@ def annotate_vcf_with_normals(
                 for record in source_vcf:
                     if site_only_sample_name is not None:
                         record = _copy_vcf_record_with_sample(record, out_vcf)
-                    variant = _variant_from_vcf_record(record)
-                    if variant is not None:
+                    assessment = _assess_vcf_record(record)
+                    summary.record(assessment.status)
+                    record.info["SKUA_STATUS"] = assessment.status.value
+                    if assessment.variant is not None:
                         pon_result = annotate_variant_with_normals(
                             alignment_file,
-                            variant,
+                            assessment.variant,
                             normal_alignments=normal_alignments,
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
@@ -573,10 +679,43 @@ def annotate_vcf_with_normals(
 
                     out_vcf.write(record)
 
-        return _render_annotated_vcf_payload(destination_path)
+        return _render_annotated_vcf_payload(destination_path), summary
     finally:
         if created_temp and destination_path.exists():
             destination_path.unlink()
+
+
+def annotate_vcf_with_normals(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    normal_alignments: list[Any] | None = None,
+    output_path: str | Path | None = None,
+    sample_name: str | None = None,
+    reference_path: str | Path | None = None,
+    strict: bool = False,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    truncate: float = DEFAULT_TRUNCATE,
+    pseudocount: float = sys.float_info.epsilon,
+    prior_variant_probability: float = 0.5,
+) -> str:
+    """Annotate an input VCF with read-count FORMAT and PON INFO fields for variants."""
+    payload, _summary = annotate_vcf_with_normals_with_summary(
+        alignment_file,
+        vcf_path,
+        normal_alignments=normal_alignments,
+        output_path=output_path,
+        sample_name=sample_name,
+        reference_path=reference_path,
+        strict=strict,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_variant_probability=prior_variant_probability,
+    )
+    return payload
 
 
 def annotate_variant(

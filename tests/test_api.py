@@ -15,6 +15,7 @@ def test_top_level_api_exports_documented_symbols() -> None:
         "annotate_variants_from_vcf",
         "annotate_vcf",
         "annotate_vcf_with_normals",
+        "annotate_vcf_with_normals_with_summary",
         "compute_stats",
     }
 

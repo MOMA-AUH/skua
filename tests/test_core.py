@@ -3,6 +3,7 @@ import json
 import pytest
 
 from skua.core import (
+    AnnotationStatus,
     PonAnnotation,
     annotate_variant,
     annotate_variant_with_normals,
@@ -10,6 +11,7 @@ from skua.core import (
     annotate_vcf,
     annotate_vcf_to_json,
     annotate_vcf_with_normals,
+    annotate_vcf_with_normals_with_summary,
     format_annotation_results,
     render_annotation_results_json,
     write_annotation_results_json,
@@ -824,6 +826,109 @@ def test_annotate_vcf_rejects_alignment_without_an_index(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Case alignment must be indexed"):
         annotate_vcf(alignment_file, vcf_path)
+
+
+def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path) -> None:
+    import pysam
+
+    alignment_file = FakeAlignmentFile(
+        [
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAATAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+            )
+        ]
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##ALT=<ID=DEL,Description=\"Deletion\">",
+                "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position\">",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t107\t.\tA\tC,G\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t108\t.\tA\t<DEL>\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t109\t.\tA\tA]chr2:42]\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t110\t.\tAT\tGCA\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    _payload, summary = annotate_vcf_with_normals_with_summary(
+        alignment_file,
+        vcf_path,
+        normal_alignments=[],
+        output_path=output_path,
+    )
+
+    assert summary.record_count == 5
+    assert summary.annotated_record_count == 1
+    assert summary.unsupported_record_count == 4
+    assert summary.unsupported_record_count_by_status == {
+        AnnotationStatus.UNSUPPORTED_MULTIALLELIC: 1,
+        AnnotationStatus.UNSUPPORTED_SYMBOLIC_ALLELE: 1,
+        AnnotationStatus.UNSUPPORTED_BREAKEND: 1,
+        AnnotationStatus.UNSUPPORTED_COMPLEX_ALLELE: 1,
+    }
+    assert summary.format_for_cli() == (
+        "skua: records=5 annotated=1 unsupported=4 "
+        "(UNSUPPORTED_BREAKEND=1, UNSUPPORTED_COMPLEX_ALLELE=1, "
+        "UNSUPPORTED_MULTIALLELIC=1, UNSUPPORTED_SYMBOLIC_ALLELE=1)"
+    )
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        records = list(annotated_vcf)
+        assert [record.info["SKUA_STATUS"] for record in records] == [
+            "ANNOTATED",
+            "UNSUPPORTED_MULTIALLELIC",
+            "UNSUPPORTED_SYMBOLIC_ALLELE",
+            "UNSUPPORTED_BREAKEND",
+            "UNSUPPORTED_COMPLEX_ALLELE",
+        ]
+        assert records[0].samples["CASE"]["SKUA_ALT_FWD"] == 1
+        assert "SKUA_ALT_FWD" not in records[1].format
+
+
+def test_annotate_vcf_with_normals_strict_mode_rejects_unsupported_records_before_output(
+    tmp_path,
+) -> None:
+    alignment_file = FakeAlignmentFile([])
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tC,G\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    with pytest.raises(ValueError, match="UNSUPPORTED_MULTIALLELIC"):
+        annotate_vcf_with_normals(
+            alignment_file,
+            vcf_path,
+            normal_alignments=[],
+            output_path=output_path,
+            strict=True,
+        )
+
+    assert not output_path.exists()
 
 
 def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:

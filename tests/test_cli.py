@@ -2,6 +2,11 @@ import skua.cli as cli
 from skua import __version__
 
 
+class FakeAnnotationSummary:
+    def format_for_cli(self) -> str:
+        return "skua: records=1 annotated=1 unsupported=0"
+
+
 def test_main_version_prints_version_and_exits_successfully(capsys) -> None:
     try:
         cli.main(["--version"])
@@ -59,12 +64,12 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
                 **{k: v for k, v in kwargs.items() if k != "normal_alignments"},
             }
         )
-        return "##fileformat=VCFv4.2\n"
+        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals",
+        "annotate_vcf_with_normals_with_summary",
         fake_verify_with_normals,
     )
 
@@ -92,13 +97,16 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
             "output_path": None,
             "sample_name": None,
             "reference_path": None,
+            "strict": False,
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
         }
     ]
-    assert capsys.readouterr().out == "##fileformat=VCFv4.2\n"
+    captured = capsys.readouterr()
+    assert captured.out == "##fileformat=VCFv4.2\n"
+    assert captured.err == "skua: records=1 annotated=1 unsupported=0\n"
 
 
 def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
@@ -132,12 +140,12 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
                 **{k: v for k, v in kwargs.items() if k != "normal_alignments"},
             }
         )
-        return "##fileformat=VCFv4.2\n"
+        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals",
+        "annotate_vcf_with_normals_with_summary",
         fake_verify_with_normals,
     )
 
@@ -171,13 +179,16 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
             "output_path": "out.vcf.gz",
             "sample_name": None,
             "reference_path": None,
+            "strict": False,
             "min_baseq": 15,
             "min_mapq": 12,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
         }
     ]
-    assert capsys.readouterr().out == ""
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "skua: records=1 annotated=1 unsupported=0\n"
 
 
 def test_main_annotate_forwards_requested_sample(monkeypatch, tmp_path) -> None:
@@ -195,10 +206,10 @@ def test_main_annotate_forwards_requested_sample(monkeypatch, tmp_path) -> None:
 
     def fake_annotate(alignment_file, vcf_path, **kwargs):
         calls.append(kwargs)
-        return ""
+        return "", FakeAnnotationSummary()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
-    monkeypatch.setattr(cli, "annotate_vcf_with_normals", fake_annotate)
+    monkeypatch.setattr(cli, "annotate_vcf_with_normals_with_summary", fake_annotate)
     normal_list_path = tmp_path / "normals.txt"
     normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
 
@@ -248,12 +259,12 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
                 "normal_count": len(kwargs.get("normal_alignments", [])),
             }
         )
-        return "##fileformat=VCFv4.2\n"
+        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals",
+        "annotate_vcf_with_normals_with_summary",
         fake_verify_with_normals,
     )
 
@@ -283,6 +294,7 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
             "vcf_path": "input.vcf",
             "output_path": None,
             "sample_name": None,
+            "strict": False,
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,

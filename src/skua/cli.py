@@ -3,12 +3,13 @@
 import argparse
 from contextlib import ExitStack
 from pathlib import Path
+import sys
 
 import pysam
 
 from . import __version__
 from .core import (
-    annotate_vcf_with_normals,
+    annotate_vcf_with_normals_with_summary,
 )
 
 
@@ -98,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Prior probability for the variant model",
     )
+    annotate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when a VCF record cannot be annotated",
+    )
 
     return parser
 
@@ -158,20 +164,25 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.pseudocount is not None:
                 pon_model_kwargs["pseudocount"] = args.pseudocount
-            payload = annotate_vcf_with_normals(
-                alignment_file,
-                Path(args.vcf),
-                normal_alignments=normal_alignments,
-                output_path=args.output,
-                sample_name=args.sample,
-                reference_path=args.reference,
-                min_baseq=args.min_baseq,
-                min_mapq=args.min_mapq,
-                **pon_model_kwargs,
-            )
+            try:
+                payload, summary = annotate_vcf_with_normals_with_summary(
+                    alignment_file,
+                    Path(args.vcf),
+                    normal_alignments=normal_alignments,
+                    output_path=args.output,
+                    sample_name=args.sample,
+                    reference_path=args.reference,
+                    strict=args.strict,
+                    min_baseq=args.min_baseq,
+                    min_mapq=args.min_mapq,
+                    **pon_model_kwargs,
+                )
+            except ValueError as exc:
+                parser.error(str(exc))
 
         if args.output is None:
             print(payload, end="")
+        print(summary.format_for_cli(), file=sys.stderr)
         return 0
 
     parser.error(f"Unknown command: {args.command}")
