@@ -589,7 +589,7 @@ def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_pat
         case_reads,
         header=FakeAlignmentHeader([{"SM": "CASE"}, {"SM": "TUMOR"}]),
     )
-    with pytest.raises(ValueError, match="multiple distinct read-group SM tags"):
+    with pytest.raises(ValueError, match="multiple samples; specify --sample"):
         annotate_vcf_with_normals(
             multi_sm_alignment,
             vcf_path,
@@ -597,6 +597,233 @@ def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_pat
             min_baseq=20,
             min_mapq=20,
         )
+
+
+def test_annotate_vcf_selects_the_only_matching_case_sample_and_filters_reads(tmp_path) -> None:
+    import pysam
+
+    case_alignment = FakeAlignmentFile(
+        [
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAATAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "case-rg"},
+            ),
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAAAAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "other-rg"},
+            ),
+        ],
+        header=FakeAlignmentHeader(
+            [
+                {"ID": "case-rg", "SM": "CASE"},
+                {"ID": "other-rg", "SM": "UNRELATED"},
+            ]
+        ),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tCONTROL",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\t0/0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    annotate_vcf(case_alignment, vcf_path, output_path=output_path)
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
+        assert record.samples["CASE"]["SKUA_NON_ALT_FWD"] == 0
+        assert record.samples["CONTROL"]["SKUA_ALT_FWD"] is None
+
+
+def test_annotate_vcf_requires_explicit_sample_when_multiple_samples_match(tmp_path) -> None:
+    case_alignment = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader(
+            [
+                {"ID": "case-rg", "SM": "CASE"},
+                {"ID": "control-rg", "SM": "CONTROL"},
+            ]
+        ),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tCONTROL",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\t0/0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="--sample"):
+        annotate_vcf(case_alignment, vcf_path)
+
+
+def test_annotate_vcf_rejects_multi_sample_normal_alignment(tmp_path) -> None:
+    case_alignment = FakeAlignmentFile([])
+    normal_alignment = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader(
+            [
+                {"ID": "normal-a", "SM": "NORMAL_A"},
+                {"ID": "normal-b", "SM": "NORMAL_B"},
+            ]
+        ),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Normal alignment 1"):
+        annotate_vcf_with_normals(
+            case_alignment,
+            vcf_path,
+            normal_alignments=[normal_alignment],
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"min_baseq": -1}, "min_baseq"),
+        ({"min_mapq": -1}, "min_mapq"),
+        ({"truncate": 0}, "truncate"),
+        ({"pseudocount": 0}, "pseudocount"),
+        ({"prior_variant_probability": 1}, "prior_variant_probability"),
+    ],
+)
+def test_annotate_vcf_with_normals_rejects_invalid_parameters(tmp_path, kwargs, message) -> None:
+    alignment_file = FakeAlignmentFile([])
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        annotate_vcf_with_normals(alignment_file, vcf_path, normal_alignments=[], **kwargs)
+
+
+def test_annotate_vcf_rejects_reference_mismatch_before_writing_output(tmp_path) -> None:
+    import pysam
+
+    alignment_file = FakeAlignmentFile([], references=("chr1",))
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tG\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reference_path = tmp_path / "reference.fa"
+    reference_path.write_text(">chr1\n" + "A" * 200 + "\n", encoding="utf-8")
+    pysam.faidx(str(reference_path))
+    output_path = tmp_path / "annotated.vcf"
+
+    with pytest.raises(ValueError, match="REF allele"):
+        annotate_vcf(
+            alignment_file,
+            vcf_path,
+            output_path=output_path,
+            reference_path=reference_path,
+        )
+
+    assert not output_path.exists()
+
+
+def test_annotate_vcf_rejects_missing_case_contig_before_writing_output(tmp_path) -> None:
+    alignment_file = FakeAlignmentFile([], references=("chr2",))
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    with pytest.raises(ValueError, match="Case alignment does not contain contig 'chr1'"):
+        annotate_vcf(alignment_file, vcf_path, output_path=output_path)
+
+    assert not output_path.exists()
+
+
+def test_annotate_vcf_rejects_alignment_without_an_index(tmp_path) -> None:
+    alignment_file = FakeAlignmentFile([], indexed=False)
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Case alignment must be indexed"):
+        annotate_vcf(alignment_file, vcf_path)
 
 
 def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
@@ -629,7 +856,10 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
             aligned_pairs=build_linear_pairs(10, 100),
         ),
     ]
-    normal_alignment = FakeAlignmentFile(normal_reads)
+    normal_alignment = FakeAlignmentFile(
+        normal_reads,
+        header=FakeAlignmentHeader([{"ID": "normal-rg", "SM": "NORMAL"}]),
+    )
 
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(

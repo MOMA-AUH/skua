@@ -74,3 +74,45 @@ def test_collect_evidence_from_alignment_propagates_mixed_counts() -> None:
     assert counts.usable == 2
     assert counts.unusable == 1
     assert counts.unusable_by_reason[UnusableReason.LOW_MAPQ] == 1
+
+
+def test_collect_evidence_from_alignment_limits_reads_to_allowed_read_groups() -> None:
+    reads = [
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
+        ),
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "other-rg"},
+        ),
+        FakeRead(
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    alignment_file = FakeAlignmentFile(reads)
+
+    counts = collect_evidence_from_alignment(
+        alignment_file,
+        contig="chr1",
+        ref_pos0=105,
+        ref_base="A",
+        alt_base="T",
+        allowed_read_group_ids=frozenset({"case-rg"}),
+    )
+
+    assert counts.alt_forward == 1
+    assert counts.non_alt_forward == 0
+    assert counts.usable == 1

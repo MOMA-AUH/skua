@@ -441,12 +441,22 @@ def collect_evidence_from_alignment(
     alt_base: str,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
 ) -> AggregatedEvidence:
-    """Fetch overlapping reads for one variant and collect strand-aware evidence."""
+    """Fetch overlapping reads for one variant and collect strand-aware evidence.
+
+    When ``allowed_read_group_ids`` is supplied, only reads assigned to one of
+    those read groups contribute evidence. This is used to isolate one sample
+    from a multi-sample alignment.
+    """
     reads = (
         read
         for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
         if is_accepted_sam_flag(read.flag)
+        and (
+            allowed_read_group_ids is None
+            or _read_group_id(read) in allowed_read_group_ids
+        )
     )
     fragment_calls: list[ReadAlleleCall] = []
     for fragment_reads in _group_reads_by_fragment(reads):

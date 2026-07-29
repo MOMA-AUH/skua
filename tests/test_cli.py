@@ -90,6 +90,8 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
             "vcf_path": "input.vcf",
             "normal_count": 2,
             "output_path": None,
+            "sample_name": None,
+            "reference_path": None,
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,
@@ -167,6 +169,8 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
             "vcf_path": "input.vcf",
             "normal_count": 1,
             "output_path": "out.vcf.gz",
+            "sample_name": None,
+            "reference_path": None,
             "min_baseq": 15,
             "min_mapq": 12,
             "truncate": 0.1,
@@ -174,6 +178,45 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
         }
     ]
     assert capsys.readouterr().out == ""
+
+
+def test_main_annotate_forwards_requested_sample(monkeypatch, tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_annotate(alignment_file, vcf_path, **kwargs):
+        calls.append(kwargs)
+        return ""
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+    monkeypatch.setattr(cli, "annotate_vcf_with_normals", fake_annotate)
+    normal_list_path = tmp_path / "normals.txt"
+    normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
+
+    assert cli.main(
+        [
+            "annotate",
+            "--vcf",
+            "input.vcf",
+            "--alignment",
+            "case.bam",
+            "--normal-list",
+            str(normal_list_path),
+            "--sample",
+            "CASE",
+        ]
+    ) == 0
+
+    assert calls[0]["sample_name"] == "CASE"
 
 
 def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_path) -> None:
@@ -239,10 +282,12 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
             "alignment_kwargs": {"reference_filename": "ref.fa"},
             "vcf_path": "input.vcf",
             "output_path": None,
+            "sample_name": None,
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
+            "reference_path": "ref.fa",
             "normal_count": 1,
         }
     ]
@@ -319,6 +364,32 @@ def test_main_annotate_rejects_empty_normal_list(capsys, tmp_path) -> None:
         raise AssertionError("Expected SystemExit for empty normal list")
 
     assert "--normal-list must include at least one normal alignment path" in capsys.readouterr().err
+
+
+def test_main_annotate_rejects_invalid_parameter_before_opening_files(capsys, tmp_path) -> None:
+    normal_list_path = tmp_path / "normals.txt"
+    normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
+
+    try:
+        cli.main(
+            [
+                "annotate",
+                "--vcf",
+                "input.vcf",
+                "--alignment",
+                "reads.bam",
+                "--normal-list",
+                str(normal_list_path),
+                "--truncate",
+                "0",
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected SystemExit for invalid --truncate")
+
+    assert "--truncate must be greater than 0 and no greater than 1" in capsys.readouterr().err
 
 
 def test_main_annotate_closes_opened_normals_when_later_open_fails(monkeypatch, tmp_path) -> None:

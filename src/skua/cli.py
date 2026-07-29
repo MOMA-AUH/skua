@@ -29,6 +29,20 @@ class OptionalDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return help_text
 
 
+def _validate_annotate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject invalid annotation parameter values before opening input files."""
+    if args.min_baseq < 0:
+        parser.error("--min-baseq must be >= 0")
+    if args.min_mapq < 0:
+        parser.error("--min-mapq must be >= 0")
+    if not 0.0 < args.truncate <= 1.0:
+        parser.error("--truncate must be greater than 0 and no greater than 1")
+    if args.pseudocount is not None and args.pseudocount <= 0:
+        parser.error("--pseudocount must be > 0")
+    if not 0.0 < args.prior_variant_probability < 1.0:
+        parser.error("--prior-variant-probability must be between 0 and 1")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser."""
     parser = argparse.ArgumentParser(
@@ -50,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     annotate_parser.add_argument("--vcf", required=True, help="Input VCF path (required)")
     annotate_parser.add_argument("--alignment", required=True, help="Input BAM/CRAM path (required)")
+    annotate_parser.add_argument(
+        "--sample",
+        help="Case sample name (required when VCF/BAM sample matching is ambiguous)",
+    )
     annotate_parser.add_argument("--reference", help="Reference FASTA path (required for CRAM)")
     annotate_parser.add_argument(
         "--output",
@@ -90,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "annotate":
+        _validate_annotate_arguments(parser, args)
         if args.output is not None:
             output_path = Path(args.output)
             if not (
@@ -133,20 +152,22 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
-            pon_kwargs = {
+            pon_model_kwargs = {
                 "truncate": args.truncate,
                 "prior_variant_probability": args.prior_variant_probability,
             }
             if args.pseudocount is not None:
-                pon_kwargs["pseudocount"] = args.pseudocount
+                pon_model_kwargs["pseudocount"] = args.pseudocount
             payload = annotate_vcf_with_normals(
                 alignment_file,
                 Path(args.vcf),
                 normal_alignments=normal_alignments,
                 output_path=args.output,
+                sample_name=args.sample,
+                reference_path=args.reference,
                 min_baseq=args.min_baseq,
                 min_mapq=args.min_mapq,
-                **pon_kwargs,
+                **pon_model_kwargs,
             )
 
         if args.output is None:

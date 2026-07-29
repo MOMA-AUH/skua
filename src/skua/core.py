@@ -58,18 +58,32 @@ class PonAnnotation:
     normal_aggregate_evidence: AggregatedEvidence
 
 
-def _alignment_sample_name(alignment_file: Any) -> str:
-    """Return the single usable read-group sample name for an alignment file."""
+@dataclass(frozen=True)
+class CaseSampleSelection:
+    """Resolved case sample and any read-group restriction needed to isolate it."""
+
+    sample_name: str
+    allowed_read_group_ids: frozenset[str] | None
+
+
+def _alignment_header_dict(alignment_file: Any) -> dict[str, Any] | None:
+    """Return an alignment header as a dictionary, when the object exposes one."""
     header = getattr(alignment_file, "header", None)
     if header is None:
-        raise ValueError("Alignment file does not expose a header with read-group sample names")
+        return None
 
     if hasattr(header, "to_dict"):
-        header_dict = header.to_dict()
-    elif isinstance(header, dict):
-        header_dict = header
-    else:
-        raise ValueError("Alignment file header does not expose read-group metadata")
+        return header.to_dict()
+    if isinstance(header, dict):
+        return header
+    raise ValueError("Alignment file header does not expose read-group metadata")
+
+
+def _alignment_sample_names(alignment_file: Any) -> tuple[str, ...]:
+    """Return distinct read-group sample names in header order."""
+    header_dict = _alignment_header_dict(alignment_file)
+    if header_dict is None:
+        return ()
 
     sample_names: list[str] = []
     for read_group in header_dict.get("RG", []):
@@ -78,16 +92,196 @@ def _alignment_sample_name(alignment_file: Any) -> str:
         sample_name = read_group.get("SM")
         if sample_name:
             sample_names.append(str(sample_name))
+    return tuple(dict.fromkeys(sample_names))
 
-    unique_sample_names = list(dict.fromkeys(sample_names))
-    if not unique_sample_names:
+
+def _read_group_ids_for_sample(alignment_file: Any, sample_name: str) -> frozenset[str]:
+    """Return read-group IDs belonging to one alignment sample."""
+    header_dict = _alignment_header_dict(alignment_file)
+    if header_dict is None:
+        return frozenset()
+
+    return frozenset(
+        str(read_group["ID"])
+        for read_group in header_dict.get("RG", [])
+        if isinstance(read_group, dict)
+        and read_group.get("SM") == sample_name
+        and read_group.get("ID")
+    )
+
+
+def _alignment_sample_name(alignment_file: Any) -> str:
+    """Return the single usable read-group sample name for an alignment file."""
+    if _alignment_header_dict(alignment_file) is None:
+        raise ValueError("Alignment file does not expose a header with read-group sample names")
+
+    sample_names = _alignment_sample_names(alignment_file)
+    if not sample_names:
         raise ValueError("Alignment file must contain exactly one usable read-group SM tag")
-    if len(unique_sample_names) > 1:
+    if len(sample_names) > 1:
         raise ValueError(
             "Alignment file contains multiple distinct read-group SM tags: "
-            + ", ".join(unique_sample_names)
+            + ", ".join(sample_names)
         )
-    return unique_sample_names[0]
+    return sample_names[0]
+
+
+def _resolve_case_sample(
+    vcf_header: Any,
+    alignment_file: Any,
+    *,
+    requested_sample_name: str | None,
+) -> CaseSampleSelection:
+    """Resolve the VCF case sample and isolate it in multi-sample alignments."""
+    vcf_sample_names = tuple(vcf_header.samples)
+    alignment_sample_names = _alignment_sample_names(alignment_file)
+
+    def selection_for(sample_name: str) -> CaseSampleSelection:
+        if len(alignment_sample_names) <= 1:
+            return CaseSampleSelection(sample_name=sample_name, allowed_read_group_ids=None)
+
+        read_group_ids = _read_group_ids_for_sample(alignment_file, sample_name)
+        if not read_group_ids:
+            raise ValueError(
+                f"Case sample {sample_name!r} has no read-group IDs in a multi-sample alignment"
+            )
+        return CaseSampleSelection(
+            sample_name=sample_name,
+            allowed_read_group_ids=read_group_ids,
+        )
+
+    if not vcf_sample_names:
+        if requested_sample_name is not None:
+            if requested_sample_name not in alignment_sample_names:
+                raise ValueError(
+                    f"Requested sample {requested_sample_name!r} is not present in the case alignment"
+                )
+            return selection_for(requested_sample_name)
+        if len(alignment_sample_names) == 1:
+            return selection_for(alignment_sample_names[0])
+        if not alignment_sample_names:
+            raise ValueError("Site-only VCF input requires a usable read-group SM tag or --sample")
+        raise ValueError("Case alignment contains multiple samples; specify --sample")
+
+    if requested_sample_name is not None:
+        if requested_sample_name not in vcf_sample_names:
+            raise ValueError(f"Requested sample {requested_sample_name!r} is not present in the VCF")
+        if alignment_sample_names and requested_sample_name not in alignment_sample_names:
+            raise ValueError(
+                f"Requested sample {requested_sample_name!r} is not present in the case alignment"
+            )
+        if not alignment_sample_names and len(vcf_sample_names) > 1:
+            raise ValueError(
+                "Case alignment has no usable read-group SM tag to select among VCF samples"
+            )
+        return selection_for(requested_sample_name)
+
+    matching_sample_names = tuple(
+        sample_name for sample_name in vcf_sample_names if sample_name in alignment_sample_names
+    )
+    if len(matching_sample_names) == 1:
+        return selection_for(matching_sample_names[0])
+    if len(matching_sample_names) > 1:
+        raise ValueError("Multiple case alignment samples match the VCF; specify --sample")
+    if len(vcf_sample_names) == 1 and not alignment_sample_names:
+        return selection_for(vcf_sample_names[0])
+    if len(vcf_sample_names) == 1:
+        raise ValueError(
+            "The sole VCF sample does not match a usable read-group SM tag in the case alignment"
+        )
+    raise ValueError("No case alignment sample matches the VCF; specify --sample")
+
+
+def _validate_normal_alignment_samples(normal_alignments: list[Any]) -> None:
+    """Require one read-group sample per normal alignment when metadata is available."""
+    for index, normal_alignment in enumerate(normal_alignments, start=1):
+        if _alignment_header_dict(normal_alignment) is None:
+            continue
+        try:
+            _alignment_sample_name(normal_alignment)
+        except ValueError as exc:
+            raise ValueError(f"Normal alignment {index}: {exc}") from exc
+
+
+def _validate_annotation_parameters(
+    *,
+    min_baseq: int,
+    min_mapq: int,
+    truncate: float | None = None,
+    pseudocount: float | None = None,
+    prior_variant_probability: float | None = None,
+) -> None:
+    """Reject parameter values whose semantics are undefined for annotation."""
+    if min_baseq < 0:
+        raise ValueError("min_baseq must be >= 0")
+    if min_mapq < 0:
+        raise ValueError("min_mapq must be >= 0")
+    if truncate is not None and not 0.0 < truncate <= 1.0:
+        raise ValueError("truncate must be greater than 0 and no greater than 1")
+    if pseudocount is not None and pseudocount <= 0:
+        raise ValueError("pseudocount must be > 0")
+    if prior_variant_probability is not None and not 0.0 < prior_variant_probability < 1.0:
+        raise ValueError("prior_variant_probability must be between 0 and 1")
+
+
+def _validate_alignment_indexes(alignment_files: list[tuple[str, Any]]) -> None:
+    """Fail before output when an alignment exposes an unavailable index."""
+    for label, alignment_file in alignment_files:
+        has_index = getattr(alignment_file, "has_index", None)
+        if has_index is not None and not has_index():
+            raise ValueError(f"{label} must be indexed")
+
+
+def _validate_vcf_against_inputs(
+    vcf_path: str | Path,
+    *,
+    alignment_files: list[tuple[str, Any]],
+    reference_path: str | Path | None,
+) -> None:
+    """Validate supported VCF records against alignment contigs and an optional FASTA."""
+    _validate_alignment_indexes(alignment_files)
+    alignment_contigs = [
+        (
+            label,
+            frozenset(contigs) if contigs is not None else None,
+        )
+        for label, alignment_file in alignment_files
+        for contigs in (getattr(alignment_file, "references", None),)
+    ]
+
+    fasta_file: Any | None = None
+    if reference_path is not None:
+        fasta_file = pysam.FastaFile(str(reference_path))
+
+    try:
+        with pysam.VariantFile(str(vcf_path)) as source_vcf:
+            for record in source_vcf:
+                variant = _variant_from_vcf_record(record)
+                if variant is None:
+                    continue
+
+                for label, contigs in alignment_contigs:
+                    if contigs is not None and variant.contig not in contigs:
+                        raise ValueError(f"{label} does not contain contig {variant.contig!r}")
+
+                if fasta_file is None:
+                    continue
+                if variant.contig not in fasta_file.references:
+                    raise ValueError(f"Reference FASTA does not contain contig {variant.contig!r}")
+
+                reference_bases = fasta_file.fetch(
+                    variant.contig,
+                    variant.ref_pos0,
+                    variant.ref_pos0 + len(variant.ref),
+                ).upper()
+                if reference_bases != variant.ref.upper():
+                    raise ValueError(
+                        f"VCF REF allele at {variant.contig}:{variant.ref_pos0 + 1} "
+                        f"is {variant.ref!r}, but the reference FASTA contains {reference_bases!r}"
+                    )
+    finally:
+        if fasta_file is not None:
+            fasta_file.close()
 
 
 def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> Any:
@@ -150,22 +344,33 @@ def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
     return copied_record
 
 
-def _annotate_read_count_format_fields(record: Any, evidence: AggregatedEvidence) -> None:
-    """Set read-count FORMAT annotations on all sample columns."""
-    for sample in record.samples.values():
-        sample["SKUA_ALT_FWD"] = evidence.alt_forward
-        sample["SKUA_ALT_REV"] = evidence.alt_reverse
-        sample["SKUA_NON_ALT_FWD"] = evidence.non_alt_forward
-        sample["SKUA_NON_ALT_REV"] = evidence.non_alt_reverse
-        sample["SKUA_USABLE"] = evidence.usable
-        sample["SKUA_UNUSABLE"] = evidence.unusable
+def _annotate_read_count_format_fields(
+    record: Any,
+    evidence: AggregatedEvidence,
+    *,
+    sample_name: str,
+) -> None:
+    """Set read-count FORMAT annotations for the selected case sample."""
+    sample = record.samples[sample_name]
+    sample["SKUA_ALT_FWD"] = evidence.alt_forward
+    sample["SKUA_ALT_REV"] = evidence.alt_reverse
+    sample["SKUA_NON_ALT_FWD"] = evidence.non_alt_forward
+    sample["SKUA_NON_ALT_REV"] = evidence.non_alt_reverse
+    sample["SKUA_USABLE"] = evidence.usable
+    sample["SKUA_UNUSABLE"] = evidence.unusable
 
 
-def _annotate_pon_sample_format_fields(record: Any, *, artifact_posterior: float, log_bayes_factor: float) -> None:
-    """Set PON model output FORMAT annotations on all sample columns."""
-    for sample in record.samples.values():
-        sample["SKUA_LOG_BAYES_FACTOR"] = float(log_bayes_factor)
-        sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
+def _annotate_pon_sample_format_fields(
+    record: Any,
+    *,
+    sample_name: str,
+    artifact_posterior: float,
+    log_bayes_factor: float,
+) -> None:
+    """Set PON model output FORMAT annotations for the selected case sample."""
+    sample = record.samples[sample_name]
+    sample["SKUA_LOG_BAYES_FACTOR"] = float(log_bayes_factor)
+    sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
 
 
 def _render_annotated_vcf_payload(output_path: Path) -> str:
@@ -188,10 +393,19 @@ def annotate_vcf(
     vcf_path: str | Path,
     *,
     output_path: str | Path | None = None,
+    sample_name: str | None = None,
+    reference_path: str | Path | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
     """Annotate an input VCF with read-count FORMAT fields for variants."""
+    _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
+    _validate_vcf_against_inputs(
+        vcf_path,
+        alignment_files=[("Case alignment", alignment_file)],
+        reference_path=reference_path,
+    )
+
     destination_path: Path
     created_temp = False
     if output_path is None:
@@ -205,9 +419,14 @@ def annotate_vcf(
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=False)
+            case_selection = _resolve_case_sample(
+                source_vcf.header,
+                alignment_file,
+                requested_sample_name=sample_name,
+            )
             site_only_sample_name: str | None = None
             if len(source_vcf.header.samples) == 0:
-                site_only_sample_name = _alignment_sample_name(alignment_file)
+                site_only_sample_name = case_selection.sample_name
                 header.add_sample(site_only_sample_name)
 
             with pysam.VariantFile(
@@ -225,8 +444,13 @@ def annotate_vcf(
                             variant,
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
+                            allowed_read_group_ids=case_selection.allowed_read_group_ids,
                         )
-                        _annotate_read_count_format_fields(record, evidence)
+                        _annotate_read_count_format_fields(
+                            record,
+                            evidence,
+                            sample_name=case_selection.sample_name,
+                        )
                     out_vcf.write(record)
 
         return _render_annotated_vcf_payload(destination_path)
@@ -241,6 +465,8 @@ def annotate_vcf_with_normals(
     *,
     normal_alignments: list[Any] | None = None,
     output_path: str | Path | None = None,
+    sample_name: str | None = None,
+    reference_path: str | Path | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
     truncate: float = DEFAULT_TRUNCATE,
@@ -250,6 +476,24 @@ def annotate_vcf_with_normals(
     """Annotate an input VCF with read-count FORMAT and PON INFO fields for variants."""
     if normal_alignments is None:
         normal_alignments = []
+
+    _validate_annotation_parameters(
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_variant_probability=prior_variant_probability,
+    )
+    _validate_normal_alignment_samples(normal_alignments)
+    _validate_vcf_against_inputs(
+        vcf_path,
+        alignment_files=[("Case alignment", alignment_file)]
+        + [
+            (f"Normal alignment {index}", normal_alignment)
+            for index, normal_alignment in enumerate(normal_alignments, start=1)
+        ],
+        reference_path=reference_path,
+    )
 
     destination_path: Path
     created_temp = False
@@ -264,9 +508,14 @@ def annotate_vcf_with_normals(
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=True)
+            case_selection = _resolve_case_sample(
+                source_vcf.header,
+                alignment_file,
+                requested_sample_name=sample_name,
+            )
             site_only_sample_name: str | None = None
             if len(source_vcf.header.samples) == 0:
-                site_only_sample_name = _alignment_sample_name(alignment_file)
+                site_only_sample_name = case_selection.sample_name
                 header.add_sample(site_only_sample_name)
 
             with pysam.VariantFile(
@@ -285,6 +534,7 @@ def annotate_vcf_with_normals(
                             normal_alignments=normal_alignments,
                             min_baseq=min_baseq,
                             min_mapq=min_mapq,
+                            allowed_read_group_ids=case_selection.allowed_read_group_ids,
                         )
                         case_evidence = pon_result.case_evidence
                         normal_samples_included = truncated_normal_evidences(
@@ -301,9 +551,14 @@ def annotate_vcf_with_normals(
                             prior_variant_probability=prior_variant_probability,
                         )
 
-                        _annotate_read_count_format_fields(record, case_evidence)
+                        _annotate_read_count_format_fields(
+                            record,
+                            case_evidence,
+                            sample_name=case_selection.sample_name,
+                        )
                         _annotate_pon_sample_format_fields(
                             record,
+                            sample_name=case_selection.sample_name,
                             artifact_posterior=stats.artifact_posterior,
                             log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
                         )
@@ -330,6 +585,7 @@ def annotate_variant(
     *,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one variant from one alignment."""
     return collect_evidence_from_alignment(
@@ -340,6 +596,7 @@ def annotate_variant(
         alt_base=variant.alt,
         min_baseq=min_baseq,
         min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
     )
 
 
@@ -350,6 +607,7 @@ def annotate_variant_with_normals(
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
 ) -> PonAnnotation:
     """Collect case and normal evidence for one variant."""
     if normal_alignments is None:
@@ -360,6 +618,7 @@ def annotate_variant_with_normals(
         variant,
         min_baseq=min_baseq,
         min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
     )
 
     normal_evidences: list[AggregatedEvidence] = []
