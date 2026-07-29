@@ -6,16 +6,18 @@ import skua
 def test_top_level_api_exports_documented_symbols() -> None:
     expected = {
         "AggregatedEvidence",
+        "AnnotationStatus",
+        "AnnotationSummary",
         "PonAnnotation",
         "Stats",
         "Variant",
         "VariantKind",
+        "VcfAnnotationResult",
         "annotate_variant",
         "annotate_variant_with_normals",
         "annotate_variants_from_vcf",
         "annotate_vcf",
         "annotate_vcf_with_normals",
-        "annotate_vcf_with_normals_with_summary",
         "compute_stats",
     }
 

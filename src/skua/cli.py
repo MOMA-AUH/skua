@@ -9,7 +9,7 @@ import pysam
 
 from . import __version__
 from .core import (
-    annotate_vcf_with_normals_with_summary,
+    annotate_vcf_with_normals,
 )
 
 
@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.pseudocount is not None:
                 pon_model_kwargs["pseudocount"] = args.pseudocount
             try:
-                payload, summary = annotate_vcf_with_normals_with_summary(
+                result = annotate_vcf_with_normals(
                     alignment_file,
                     Path(args.vcf),
                     normal_alignments=normal_alignments,
@@ -181,8 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(str(exc))
 
         if args.output is None:
-            print(payload, end="")
-        print(summary.format_for_cli(), file=sys.stderr)
+            print(result.vcf_text, end="")
+        print(result.summary.format_for_cli(), file=sys.stderr)
         return 0
 
     parser.error(f"Unknown command: {args.command}")

@@ -11,7 +11,6 @@ from skua.core import (
     annotate_vcf,
     annotate_vcf_to_json,
     annotate_vcf_with_normals,
-    annotate_vcf_with_normals_with_summary,
     format_annotation_results,
     render_annotation_results_json,
     write_annotation_results_json,
@@ -373,7 +372,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.vcf"
 
-    payload = annotate_vcf(
+    result = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -381,7 +380,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_ALT_FWD" in payload
+    assert "SKUA_ALT_FWD" in result.vcf_text
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -434,7 +433,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_insertion.vcf"
 
-    payload = annotate_vcf(
+    result = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -442,7 +441,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_ALT_FWD" in payload
+    assert "SKUA_ALT_FWD" in result.vcf_text
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -482,7 +481,7 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.vcf.gz"
 
-    payload = annotate_vcf(
+    result = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -491,7 +490,7 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
     )
 
     assert output_path.read_bytes()[:2] == b"\x1f\x8b"
-    assert "#CHROM" in payload
+    assert "#CHROM" in result.vcf_text
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -530,7 +529,7 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
     )
     output_path = tmp_path / "annotated_site_only.vcf"
 
-    payload = annotate_vcf_with_normals(
+    result = annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[],
@@ -539,7 +538,7 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
         min_mapq=20,
     )
 
-    assert "SKUA_ARTIFACT_POSTERIOR" in payload
+    assert "SKUA_ARTIFACT_POSTERIOR" in result.vcf_text
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         assert list(annotated_vcf.header.samples) == ["CASE"]
         record = next(iter(annotated_vcf))
@@ -864,13 +863,14 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
     )
     output_path = tmp_path / "annotated.vcf"
 
-    _payload, summary = annotate_vcf_with_normals_with_summary(
+    result = annotate_vcf_with_normals(
         alignment_file,
         vcf_path,
         normal_alignments=[],
         output_path=output_path,
     )
 
+    summary = result.summary
     assert summary.record_count == 5
     assert summary.annotated_record_count == 1
     assert summary.unsupported_record_count == 4
@@ -982,7 +982,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_pon.vcf"
 
-    payload = annotate_vcf_with_normals(
+    result = annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[normal_alignment],
@@ -991,8 +991,8 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_LOG_BAYES_FACTOR" in payload
-    assert "SKUA_ARTIFACT_POSTERIOR" in payload
+    assert "SKUA_LOG_BAYES_FACTOR" in result.vcf_text
+    assert "SKUA_ARTIFACT_POSTERIOR" in result.vcf_text
     
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))

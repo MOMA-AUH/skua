@@ -7,6 +7,11 @@ class FakeAnnotationSummary:
         return "skua: records=1 annotated=1 unsupported=0"
 
 
+class FakeAnnotationResult:
+    vcf_text = "##fileformat=VCFv4.2\n"
+    summary = FakeAnnotationSummary()
+
+
 def test_main_version_prints_version_and_exits_successfully(capsys) -> None:
     try:
         cli.main(["--version"])
@@ -64,12 +69,12 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
                 **{k: v for k, v in kwargs.items() if k != "normal_alignments"},
             }
         )
-        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
+        return FakeAnnotationResult()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals_with_summary",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 
@@ -140,12 +145,12 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
                 **{k: v for k, v in kwargs.items() if k != "normal_alignments"},
             }
         )
-        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
+        return FakeAnnotationResult()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals_with_summary",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 
@@ -206,10 +211,10 @@ def test_main_annotate_forwards_requested_sample(monkeypatch, tmp_path) -> None:
 
     def fake_annotate(alignment_file, vcf_path, **kwargs):
         calls.append(kwargs)
-        return "", FakeAnnotationSummary()
+        return FakeAnnotationResult()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
-    monkeypatch.setattr(cli, "annotate_vcf_with_normals_with_summary", fake_annotate)
+    monkeypatch.setattr(cli, "annotate_vcf_with_normals", fake_annotate)
     normal_list_path = tmp_path / "normals.txt"
     normal_list_path.write_text("normal1.bam\n", encoding="utf-8")
 
@@ -259,12 +264,12 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
                 "normal_count": len(kwargs.get("normal_alignments", [])),
             }
         )
-        return "##fileformat=VCFv4.2\n", FakeAnnotationSummary()
+        return FakeAnnotationResult()
 
     monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
     monkeypatch.setattr(
         cli,
-        "annotate_vcf_with_normals_with_summary",
+        "annotate_vcf_with_normals",
         fake_verify_with_normals,
     )
 

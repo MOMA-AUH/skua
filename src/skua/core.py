@@ -113,6 +113,14 @@ class AnnotationSummary:
 
 
 @dataclass(frozen=True)
+class VcfAnnotationResult:
+    """Rendered annotated VCF and the summary of records processed to produce it."""
+
+    vcf_text: str
+    summary: AnnotationSummary
+
+
+@dataclass(frozen=True)
 class PonAnnotation:
     """Evidence collected for one case variant and its panel of normals.
 
@@ -496,7 +504,7 @@ def annotate_vcf(
     strict: bool = False,
     min_baseq: int = 20,
     min_mapq: int = 20,
-) -> str:
+) -> VcfAnnotationResult:
     """Annotate an input VCF with read-count FORMAT fields for variants."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
     _validate_vcf_against_inputs(
@@ -516,6 +524,7 @@ def annotate_vcf(
     else:
         destination_path = Path(output_path)
 
+    summary = AnnotationSummary()
     try:
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
             header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=False)
@@ -538,6 +547,7 @@ def annotate_vcf(
                     if site_only_sample_name is not None:
                         record = _copy_vcf_record_with_sample(record, out_vcf)
                     assessment = _assess_vcf_record(record)
+                    summary.record(assessment.status)
                     record.info["SKUA_STATUS"] = assessment.status.value
                     if assessment.variant is not None:
                         evidence = annotate_variant(
@@ -554,13 +564,16 @@ def annotate_vcf(
                         )
                     out_vcf.write(record)
 
-        return _render_annotated_vcf_payload(destination_path)
+        return VcfAnnotationResult(
+            vcf_text=_render_annotated_vcf_payload(destination_path),
+            summary=summary,
+        )
     finally:
         if created_temp and destination_path.exists():
             destination_path.unlink()
 
 
-def annotate_vcf_with_normals_with_summary(
+def annotate_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
@@ -574,8 +587,8 @@ def annotate_vcf_with_normals_with_summary(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
-) -> tuple[str, AnnotationSummary]:
-    """Annotate an input VCF and return its rendered payload and record summary."""
+) -> VcfAnnotationResult:
+    """Annotate an input VCF with read-count FORMAT and PON INFO fields."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -679,44 +692,13 @@ def annotate_vcf_with_normals_with_summary(
 
                     out_vcf.write(record)
 
-        return _render_annotated_vcf_payload(destination_path), summary
+        return VcfAnnotationResult(
+            vcf_text=_render_annotated_vcf_payload(destination_path),
+            summary=summary,
+        )
     finally:
         if created_temp and destination_path.exists():
             destination_path.unlink()
-
-
-def annotate_vcf_with_normals(
-    alignment_file: Any,
-    vcf_path: str | Path,
-    *,
-    normal_alignments: list[Any] | None = None,
-    output_path: str | Path | None = None,
-    sample_name: str | None = None,
-    reference_path: str | Path | None = None,
-    strict: bool = False,
-    min_baseq: int = 20,
-    min_mapq: int = 20,
-    truncate: float = DEFAULT_TRUNCATE,
-    pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
-) -> str:
-    """Annotate an input VCF with read-count FORMAT and PON INFO fields for variants."""
-    payload, _summary = annotate_vcf_with_normals_with_summary(
-        alignment_file,
-        vcf_path,
-        normal_alignments=normal_alignments,
-        output_path=output_path,
-        sample_name=sample_name,
-        reference_path=reference_path,
-        strict=strict,
-        min_baseq=min_baseq,
-        min_mapq=min_mapq,
-        truncate=truncate,
-        pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
-    )
-    return payload
-
 
 def annotate_variant(
     alignment_file: Any,

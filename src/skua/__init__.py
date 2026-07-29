@@ -4,6 +4,7 @@ from .core import (
     AnnotationStatus,
     AnnotationSummary,
     PonAnnotation,
+    VcfAnnotationResult,
     annotate_variant,
     annotate_variant_with_normals,
     annotate_variants_from_vcf,
@@ -12,7 +13,6 @@ from .core import (
     annotate_vcf_to_json,
     annotate_vcf_to_json_with_normals,
     annotate_vcf_with_normals,
-    annotate_vcf_with_normals_with_summary,
 )
 from .evidence import AggregatedEvidence, AlleleSupport, ReadAlleleCall, UnusableReason
 from .stats import Stats, compute_stats
@@ -29,6 +29,7 @@ __all__ = [
     "UnusableReason",
     "Variant",
     "VariantKind",
+    "VcfAnnotationResult",
     "annotate_variant",
     "annotate_variant_with_normals",
     "annotate_variants_from_vcf",
@@ -37,7 +38,6 @@ __all__ = [
     "annotate_vcf_to_json",
     "annotate_vcf_to_json_with_normals",
     "annotate_vcf_with_normals",
-    "annotate_vcf_with_normals_with_summary",
     "compute_stats",
     "__version__",
 ]
