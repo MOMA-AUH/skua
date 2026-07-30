@@ -418,11 +418,6 @@ def _assess_vcf_record(record: Any) -> VcfRecordAnnotation:
     return VcfRecordAnnotation(AnnotationStatus.ANNOTATED, variant)
 
 
-def _variant_from_vcf_record(record: Any) -> Variant | None:
-    """Build a Variant from a pysam VCF record when supported, else None."""
-    return _assess_vcf_record(record).variant
-
-
 def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
     """Copy a site-only VCF record into an output header that has one sample."""
     copied_record = out_vcf.new_record(
@@ -495,30 +490,24 @@ def _validate_distinct_vcf_paths(vcf_path: str | Path, output_path: str | Path) 
         raise ValueError("output_path must not refer to the input VCF")
 
 
-def annotate_vcf(
+def _annotate_vcf_stream(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
     output_path: str | Path,
-    sample_name: str | None = None,
-    reference_path: str | Path | None = None,
-    strict: bool = False,
-    min_baseq: int = 20,
-    min_mapq: int = 20,
+    sample_name: str | None,
+    include_pon_info: bool,
+    annotate_supported_record: Callable[[Any, Variant, CaseSampleSelection], None],
 ) -> AnnotationSummary:
-    """Annotate an input VCF with read-count FORMAT fields for variants."""
-    _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
-    _validate_distinct_vcf_paths(vcf_path, output_path)
-    _validate_vcf_against_inputs(
-        vcf_path,
-        alignment_files=[("Case alignment", alignment_file)],
-        reference_path=reference_path,
-        strict=strict,
-    )
+    """Stream an annotated VCF after caller-specific input preflight.
 
+    The case-only and panel-of-normals entry points share header preparation,
+    case-sample resolution, status handling, and output.  Their distinct
+    evidence calculations stay in their respective callers.
+    """
     summary = AnnotationSummary()
     with pysam.VariantFile(str(vcf_path)) as source_vcf:
-        header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=False)
+        header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=include_pon_info)
         case_selection = _resolve_case_sample(
             source_vcf.header,
             alignment_file,
@@ -541,21 +530,59 @@ def annotate_vcf(
                 summary.record(assessment.status)
                 record.info["SKUA_STATUS"] = assessment.status.value
                 if assessment.variant is not None:
-                    evidence = annotate_variant(
-                        alignment_file,
-                        assessment.variant,
-                        min_baseq=min_baseq,
-                        min_mapq=min_mapq,
-                        allowed_read_group_ids=case_selection.allowed_read_group_ids,
-                    )
-                    _annotate_read_count_format_fields(
-                        record,
-                        evidence,
-                        sample_name=case_selection.sample_name,
-                    )
+                    annotate_supported_record(record, assessment.variant, case_selection)
                 out_vcf.write(record)
 
     return summary
+
+
+def annotate_vcf(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    output_path: str | Path,
+    sample_name: str | None = None,
+    reference_path: str | Path | None = None,
+    strict: bool = False,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> AnnotationSummary:
+    """Annotate an input VCF with read-count FORMAT fields for variants."""
+    _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
+    _validate_distinct_vcf_paths(vcf_path, output_path)
+    _validate_vcf_against_inputs(
+        vcf_path,
+        alignment_files=[("Case alignment", alignment_file)],
+        reference_path=reference_path,
+        strict=strict,
+    )
+
+    def annotate_supported_record(
+        record: Any,
+        variant: Variant,
+        case_selection: CaseSampleSelection,
+    ) -> None:
+        evidence = annotate_variant(
+            alignment_file,
+            variant,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
+        )
+        _annotate_read_count_format_fields(
+            record,
+            evidence,
+            sample_name=case_selection.sample_name,
+        )
+
+    return _annotate_vcf_stream(
+        alignment_file,
+        vcf_path,
+        output_path=output_path,
+        sample_name=sample_name,
+        include_pon_info=False,
+        annotate_supported_record=annotate_supported_record,
+    )
 
 
 def annotate_vcf_with_normals(
@@ -597,77 +624,62 @@ def annotate_vcf_with_normals(
         strict=strict,
     )
 
-    summary = AnnotationSummary()
-    with pysam.VariantFile(str(vcf_path)) as source_vcf:
-        header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=True)
-        case_selection = _resolve_case_sample(
-            source_vcf.header,
+    def annotate_supported_record(
+        record: Any,
+        variant: Variant,
+        case_selection: CaseSampleSelection,
+    ) -> None:
+        pon_result = annotate_variant_with_normals(
             alignment_file,
-            requested_sample_name=sample_name,
+            variant,
+            normal_alignments=normal_alignments,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
-        site_only_sample_name: str | None = None
-        if len(source_vcf.header.samples) == 0:
-            site_only_sample_name = case_selection.sample_name
-            header.add_sample(site_only_sample_name)
+        case_evidence = pon_result.case_evidence
+        normal_samples_included = truncated_normal_evidences(
+            list(pon_result.normal_evidences),
+            truncate=truncate,
+        )
+        normal_output_evidence = aggregate_evidence(normal_samples_included)
+        stats = compute_stats(
+            case_evidence,
+            normal_output_evidence,
+            per_sample_evidences=list(pon_result.normal_evidences),
+            truncate=truncate,
+            pseudocount=pseudocount,
+            prior_variant_probability=prior_variant_probability,
+        )
 
-        with pysam.VariantFile(
-            str(output_path),
-            _vcf_write_mode(output_path),
-            header=header,
-        ) as out_vcf:
-            for record in source_vcf:
-                if site_only_sample_name is not None:
-                    record = _copy_vcf_record_with_sample(record, out_vcf)
-                assessment = _assess_vcf_record(record)
-                summary.record(assessment.status)
-                record.info["SKUA_STATUS"] = assessment.status.value
-                if assessment.variant is not None:
-                    pon_result = annotate_variant_with_normals(
-                        alignment_file,
-                        assessment.variant,
-                        normal_alignments=normal_alignments,
-                        min_baseq=min_baseq,
-                        min_mapq=min_mapq,
-                        allowed_read_group_ids=case_selection.allowed_read_group_ids,
-                    )
-                    case_evidence = pon_result.case_evidence
-                    normal_samples_included = truncated_normal_evidences(
-                        list(pon_result.normal_evidences),
-                        truncate=truncate,
-                    )
-                    normal_output_evidence = aggregate_evidence(normal_samples_included)
-                    stats = compute_stats(
-                        case_evidence,
-                        normal_output_evidence,
-                        per_sample_evidences=list(pon_result.normal_evidences),
-                        truncate=truncate,
-                        pseudocount=pseudocount,
-                        prior_variant_probability=prior_variant_probability,
-                    )
+        _annotate_read_count_format_fields(
+            record,
+            case_evidence,
+            sample_name=case_selection.sample_name,
+        )
+        _annotate_pon_sample_format_fields(
+            record,
+            sample_name=case_selection.sample_name,
+            artifact_posterior=stats.artifact_posterior,
+            log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
+        )
+        record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
+        record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
+        record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
+        record.info["SKUA_PON_NON_ALT_FWD"] = normal_output_evidence.non_alt_forward
+        record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
+        record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
+        record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
+        record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
 
-                    _annotate_read_count_format_fields(
-                        record,
-                        case_evidence,
-                        sample_name=case_selection.sample_name,
-                    )
-                    _annotate_pon_sample_format_fields(
-                        record,
-                        sample_name=case_selection.sample_name,
-                        artifact_posterior=stats.artifact_posterior,
-                        log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
-                    )
-                    record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
-                    record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
-                    record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
-                    record.info["SKUA_PON_NON_ALT_FWD"] = normal_output_evidence.non_alt_forward
-                    record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
-                    record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
-                    record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
-                    record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
-
-                out_vcf.write(record)
-
-    return summary
+    return _annotate_vcf_stream(
+        alignment_file,
+        vcf_path,
+        output_path=output_path,
+        sample_name=sample_name,
+        include_pon_info=True,
+        annotate_supported_record=annotate_supported_record,
+    )
 
 
 def annotate_variant(

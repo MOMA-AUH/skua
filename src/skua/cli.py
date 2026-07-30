@@ -9,6 +9,7 @@ import pysam
 
 from . import __version__
 from .core import (
+    _validate_annotation_parameters,
     annotate_vcf_with_normals,
 )
 
@@ -32,16 +33,16 @@ class OptionalDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
 def _validate_annotate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Reject invalid annotation parameter values before opening input files."""
-    if args.min_baseq < 0:
-        parser.error("--min-baseq must be >= 0")
-    if args.min_mapq < 0:
-        parser.error("--min-mapq must be >= 0")
-    if not 0.0 < args.truncate <= 1.0:
-        parser.error("--truncate must be greater than 0 and no greater than 1")
-    if args.pseudocount is not None and args.pseudocount <= 0:
-        parser.error("--pseudocount must be > 0")
-    if not 0.0 < args.prior_variant_probability < 1.0:
-        parser.error("--prior-variant-probability must be between 0 and 1")
+    try:
+        _validate_annotation_parameters(
+            min_baseq=args.min_baseq,
+            min_mapq=args.min_mapq,
+            truncate=args.truncate,
+            pseudocount=args.pseudocount,
+            prior_variant_probability=args.prior_variant_probability,
+        )
+    except ValueError as exc:
+        parser.error(f"--{str(exc).replace('_', '-')}")
 
 
 def build_parser() -> argparse.ArgumentParser:

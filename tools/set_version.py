@@ -2,7 +2,7 @@
 """Bump skua version across code and packaging metadata.
 
 Usage:
-    python tools/bump_version.py 0.1.2
+    python tools/set_version.py 0.1.2
 """
 
 from pathlib import Path
@@ -14,20 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[a-zA-Z0-9_.+-]*)?$")
 
 
-FILES_AND_PATTERNS = [
-    (
-        ROOT / "pyproject.toml",
-        re.compile(r'^(version\s*=\s*")([^"]+)(")$', flags=re.MULTILINE),
-    ),
-    (
-        ROOT / "conda-recipe" / "meta.yaml",
-        re.compile(r'^(\{\%\s*set\s+version\s*=\s*")([^"]+)("\s*\%\})$', flags=re.MULTILINE),
-    ),
-    (
-        ROOT / "src" / "skua" / "__init__.py",
-        re.compile(r'^(__version__\s*=\s*")([^"]+)(")$', flags=re.MULTILINE),
-    ),
-]
+VERSION_FILE = ROOT / "src" / "skua" / "_version.py"
+VERSION_PATTERN_IN_FILE = re.compile(
+    r'^(__version__\s*=\s*")([^"]+)(")$', flags=re.MULTILINE
+)
+CONDA_RECIPE = ROOT / "conda-recipe" / "meta.yaml"
+CONDA_VERSION_PATTERN = re.compile(
+    r'^(\{\%\s*set\s+version\s*=\s*")([^"]+)("\s*\%\})$', flags=re.MULTILINE
+)
 
 
 def _replace_version_once(text: str, pattern: re.Pattern[str], new_version: str, path: Path) -> tuple[str, str]:
@@ -50,15 +44,18 @@ def main(argv: list[str]) -> int:
         print(f"Invalid version: {new_version}")
         return 2
 
-    seen_old_versions: set[str] = set()
-
-    for path, pattern in FILES_AND_PATTERNS:
+    targets = (
+        (VERSION_FILE, VERSION_PATTERN_IN_FILE),
+        (CONDA_RECIPE, CONDA_VERSION_PATTERN),
+    )
+    old_versions: set[str] = set()
+    for path, pattern in targets:
         text = path.read_text(encoding="utf-8")
         updated, old_version = _replace_version_once(text, pattern, new_version, path)
-        seen_old_versions.add(old_version)
         path.write_text(updated, encoding="utf-8")
+        old_versions.add(old_version)
 
-    old_versions_display = ", ".join(sorted(seen_old_versions))
+    old_versions_display = ", ".join(sorted(old_versions))
     print(f"Updated version(s) [{old_versions_display}] -> {new_version}")
     return 0
 

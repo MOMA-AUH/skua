@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,19 +14,20 @@ def _extract_version(path: Path, pattern: str) -> str:
 
 
 def test_version_is_synced_across_code_and_packaging() -> None:
-    versions = {
-        "pyproject": _extract_version(
-            ROOT / "pyproject.toml",
-            r'^version\s*=\s*"([^"]+)"$',
-        ),
-        "conda_recipe": _extract_version(
-            ROOT / "conda-recipe" / "meta.yaml",
-            r'^\{\%\s*set\s+version\s*=\s*"([^"]+)"\s*\%\}$',
-        ),
-        "package_code": _extract_version(
-            ROOT / "src" / "skua" / "__init__.py",
-            r'^__version__\s*=\s*"([^"]+)"$',
-        ),
-    }
+    package_version = _extract_version(
+        ROOT / "src" / "skua" / "_version.py",
+        r'^__version__\s*=\s*"([^"]+)"$',
+    )
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    conda_recipe = (ROOT / "conda-recipe" / "meta.yaml").read_text(encoding="utf-8")
 
-    assert len(set(versions.values())) == 1, f"Version mismatch: {versions}"
+    assert pyproject["project"]["dynamic"] == ["version"]
+    assert "version" not in pyproject["project"]
+    assert pyproject["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "skua._version.__version__"
+    }
+    conda_version = _extract_version(
+        ROOT / "conda-recipe" / "meta.yaml",
+        r'^\{\%\s*set\s+version\s*=\s*"([^"]+)"\s*\%\}$',
+    )
+    assert conda_version == package_version

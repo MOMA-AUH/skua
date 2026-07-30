@@ -16,6 +16,7 @@ from .core import (
 from .evidence import AggregatedEvidence, AlleleSupport, ReadAlleleCall, UnusableReason
 from .stats import Stats, compute_stats
 from .variants import Variant, VariantKind
+from ._version import __version__
 
 __all__ = [
     "AggregatedEvidence",
@@ -39,4 +40,3 @@ __all__ = [
     "compute_stats",
     "__version__",
 ]
-__version__ = "0.3.0"

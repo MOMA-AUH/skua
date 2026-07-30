@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skua"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Predatory and kleptoparasitic variant caller for detecting subclonal mutations in deep sequencing data"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,6 +36,9 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "skua._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
