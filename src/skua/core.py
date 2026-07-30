@@ -1,7 +1,7 @@
 """Core public API for skua."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import sys
@@ -68,47 +68,6 @@ class VcfRecordAnnotation:
 
     status: AnnotationStatus
     variant: Variant | None
-
-
-@dataclass
-class AnnotationSummary:
-    """Counts of VCF records processed during one Skua annotation run."""
-
-    record_count: int = 0
-    annotated_record_count: int = 0
-    unsupported_record_count_by_status: dict[AnnotationStatus, int] = field(default_factory=dict)
-
-    def record(self, status: AnnotationStatus) -> None:
-        """Record one VCF annotation outcome."""
-        self.record_count += 1
-        if status == AnnotationStatus.ANNOTATED:
-            self.annotated_record_count += 1
-            return
-        self.unsupported_record_count_by_status[status] = (
-            self.unsupported_record_count_by_status.get(status, 0) + 1
-        )
-
-    @property
-    def unsupported_record_count(self) -> int:
-        """Return the number of records not annotated by Skua."""
-        return self.record_count - self.annotated_record_count
-
-    def format_for_cli(self) -> str:
-        """Render a concise, deterministic command-line summary."""
-        message = (
-            f"skua: records={self.record_count} annotated={self.annotated_record_count} "
-            f"unsupported={self.unsupported_record_count}"
-        )
-        if not self.unsupported_record_count_by_status:
-            return message
-        details = ", ".join(
-            f"{status.value}={count}"
-            for status, count in sorted(
-                self.unsupported_record_count_by_status.items(),
-                key=lambda item: item[0].value,
-            )
-        )
-        return f"{message} ({details})"
 
 
 @dataclass(frozen=True)
@@ -498,14 +457,13 @@ def _annotate_vcf_stream(
     sample_name: str | None,
     include_pon_info: bool,
     annotate_supported_record: Callable[[Any, Variant, CaseSampleSelection], None],
-) -> AnnotationSummary:
+) -> None:
     """Stream an annotated VCF after caller-specific input preflight.
 
     The case-only and panel-of-normals entry points share header preparation,
     case-sample resolution, status handling, and output.  Their distinct
     evidence calculations stay in their respective callers.
     """
-    summary = AnnotationSummary()
     with pysam.VariantFile(str(vcf_path)) as source_vcf:
         header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=include_pon_info)
         case_selection = _resolve_case_sample(
@@ -527,14 +485,10 @@ def _annotate_vcf_stream(
                 if site_only_sample_name is not None:
                     record = _copy_vcf_record_with_sample(record, out_vcf)
                 assessment = _assess_vcf_record(record)
-                summary.record(assessment.status)
                 record.info["SKUA_STATUS"] = assessment.status.value
                 if assessment.variant is not None:
                     annotate_supported_record(record, assessment.variant, case_selection)
                 out_vcf.write(record)
-
-    return summary
-
 
 def annotate_vcf(
     alignment_file: Any,
@@ -546,7 +500,7 @@ def annotate_vcf(
     strict: bool = False,
     min_baseq: int = 20,
     min_mapq: int = 20,
-) -> AnnotationSummary:
+) -> None:
     """Annotate an input VCF with read-count FORMAT fields for variants."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
     _validate_distinct_vcf_paths(vcf_path, output_path)
@@ -575,7 +529,7 @@ def annotate_vcf(
             sample_name=case_selection.sample_name,
         )
 
-    return _annotate_vcf_stream(
+    _annotate_vcf_stream(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -599,7 +553,7 @@ def annotate_vcf_with_normals(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
-) -> AnnotationSummary:
+) -> None:
     """Annotate an input VCF with read-count FORMAT and PON INFO fields."""
     if normal_alignments is None:
         normal_alignments = []
@@ -672,7 +626,7 @@ def annotate_vcf_with_normals(
         record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
         record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
 
-    return _annotate_vcf_stream(
+    _annotate_vcf_stream(
         alignment_file,
         vcf_path,
         output_path=output_path,

@@ -3,7 +3,6 @@
 import argparse
 from contextlib import ExitStack
 from pathlib import Path
-import sys
 
 import pysam
 
@@ -166,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.pseudocount is not None:
                 pon_model_kwargs["pseudocount"] = args.pseudocount
             try:
-                summary = annotate_vcf_with_normals(
+                annotate_vcf_with_normals(
                     alignment_file,
                     Path(args.vcf),
                     normal_alignments=normal_alignments,
@@ -181,7 +180,6 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 parser.error(str(exc))
 
-        print(summary.format_for_cli(), file=sys.stderr)
         return 0
 
     parser.error(f"Unknown command: {args.command}")

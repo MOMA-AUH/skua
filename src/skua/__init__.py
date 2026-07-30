@@ -2,7 +2,6 @@
 
 from .core import (
     AnnotationStatus,
-    AnnotationSummary,
     PonAnnotation,
     annotate_variant,
     annotate_variant_with_normals,
@@ -21,7 +20,6 @@ from ._version import __version__
 __all__ = [
     "AggregatedEvidence",
     "AnnotationStatus",
-    "AnnotationSummary",
     "AlleleSupport",
     "PonAnnotation",
     "ReadAlleleCall",

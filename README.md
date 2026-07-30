@@ -72,7 +72,7 @@ Output INFO fields:
 - `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE`: Aggregated usable/unusable counts
 - `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
 
-By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. After a successful `annotate` command, skua writes a summary to standard error, for example `skua: records=12 annotated=10 unsupported=2 (UNSUPPORTED_RECORD=2)`. VCF output is written to `--output` or standard output, so the summary does not contaminate the VCF stream.
+By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
 
 ## Python API
 

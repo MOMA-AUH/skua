@@ -378,15 +378,13 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.vcf"
 
-    summary = annotate_vcf(
+    assert annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
         min_baseq=20,
         min_mapq=20,
-    )
-
-    assert summary.annotated_record_count == 1
+    ) is None
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -443,7 +441,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_insertion.vcf"
 
-    summary = annotate_vcf(
+    annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -451,7 +449,6 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -495,7 +492,7 @@ def test_annotate_vcf_supports_uppercase_bgzipped_output(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.VCF.GZ"
 
-    summary = annotate_vcf(
+    annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -504,7 +501,6 @@ def test_annotate_vcf_supports_uppercase_bgzipped_output(tmp_path) -> None:
     )
 
     assert output_path.read_bytes()[:2] == b"\x1f\x8b"
-    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -621,16 +617,14 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
     )
     output_path = tmp_path / "annotated_site_only.vcf"
 
-    summary = annotate_vcf_with_normals(
+    assert annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[],
         output_path=output_path,
         min_baseq=20,
         min_mapq=20,
-    )
-
-    assert summary.annotated_record_count == 1
+    ) is None
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         assert list(annotated_vcf.header.samples) == ["CASE"]
         record = next(iter(annotated_vcf))
@@ -1030,28 +1024,11 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
     )
     output_path = tmp_path / "annotated.vcf"
 
-    summary = annotate_vcf_with_normals(
+    annotate_vcf_with_normals(
         alignment_file,
         vcf_path,
         normal_alignments=[],
         output_path=output_path,
-    )
-
-    assert summary.record_count == 6
-    assert summary.annotated_record_count == 1
-    assert summary.unsupported_record_count == 5
-    assert summary.unsupported_record_count_by_status == {
-        AnnotationStatus.UNSUPPORTED_MULTIALLELIC: 1,
-        AnnotationStatus.UNSUPPORTED_SYMBOLIC_ALLELE: 1,
-        AnnotationStatus.UNSUPPORTED_BREAKEND: 1,
-        AnnotationStatus.UNSUPPORTED_COMPLEX_ALLELE: 1,
-        AnnotationStatus.UNSUPPORTED_RECORD: 1,
-    }
-    assert summary.format_for_cli() == (
-        "skua: records=6 annotated=1 unsupported=5 "
-        "(UNSUPPORTED_BREAKEND=1, UNSUPPORTED_COMPLEX_ALLELE=1, "
-        "UNSUPPORTED_MULTIALLELIC=1, UNSUPPORTED_RECORD=1, "
-        "UNSUPPORTED_SYMBOLIC_ALLELE=1)"
     )
 
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
@@ -1157,7 +1134,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_pon.vcf"
 
-    summary = annotate_vcf_with_normals(
+    annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[normal_alignment],
@@ -1165,8 +1142,6 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         min_baseq=20,
         min_mapq=20,
     )
-
-    assert summary.annotated_record_count == 1
 
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))

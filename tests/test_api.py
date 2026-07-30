@@ -7,7 +7,6 @@ def test_top_level_api_exports_documented_symbols() -> None:
     expected = {
         "AggregatedEvidence",
         "AnnotationStatus",
-        "AnnotationSummary",
         "PonAnnotation",
         "Stats",
         "Variant",
