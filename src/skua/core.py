@@ -458,7 +458,7 @@ def _annotate_vcf_stream(
     include_pon_info: bool,
     annotate_supported_record: Callable[[Any, Variant, CaseSampleSelection], None],
 ) -> None:
-    """Stream an annotated VCF after caller-specific input preflight.
+    """Write an annotated VCF after caller-specific input preflight.
 
     The case-only and panel-of-normals entry points share header preparation,
     case-sample resolution, status handling, and output.  Their distinct
