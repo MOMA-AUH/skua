@@ -7,13 +7,12 @@ name = "skua"
 dynamic = ["version"]
 description = "Predatory and kleptoparasitic variant caller for detecting subclonal mutations in deep sequencing data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{name = "Michael Knudsen", email = "micknudsen@gmail.com"}]
 license = {text = "MIT"}
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",

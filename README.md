@@ -102,7 +102,7 @@ CRAM.
 
 ## Requirements
 
-- Python ≥ 3.10
+- Python ≥ 3.11
 - pysam ≥ 0.22
 
 ## License
