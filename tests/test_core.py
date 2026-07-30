@@ -338,6 +338,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
             query_sequence="AAAAATAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
         FakeRead(
             mapping_quality=60,
@@ -345,6 +346,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
             query_sequence="AAAAAAAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
         FakeRead(
             mapping_quality=5,
@@ -352,9 +354,13 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
             query_sequence="AAAAATAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
     ]
-    alignment_file = FakeAlignmentFile(reads)
+    alignment_file = FakeAlignmentFile(
+        reads,
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
 
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
@@ -413,9 +419,13 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
                 (8, 107),
                 (9, 108),
             ],
+            tags={"RG": "case-rg"},
         ),
     ]
-    alignment_file = FakeAlignmentFile(reads)
+    alignment_file = FakeAlignmentFile(
+        reads,
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
 
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
@@ -461,9 +471,13 @@ def test_annotate_vcf_supports_uppercase_bgzipped_output(tmp_path) -> None:
             query_sequence="AAAAATAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
     ]
-    alignment_file = FakeAlignmentFile(reads)
+    alignment_file = FakeAlignmentFile(
+        reads,
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
 
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
@@ -544,8 +558,10 @@ def test_annotate_vcf_counts_lowercase_alleles_as_alt_evidence(tmp_path) -> None
                 query_sequence="AAAAATAAAA",
                 query_qualities=[35] * 10,
                 aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "case-rg"},
             ),
-        ]
+        ],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
     )
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
@@ -582,11 +598,12 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
             query_sequence="AAAAATAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
     ]
     case_alignment = FakeAlignmentFile(
         case_reads,
-        header=FakeAlignmentHeader([{"SM": "CASE"}]),
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
     )
 
     vcf_path = tmp_path / "site_only.vcf"
@@ -729,6 +746,69 @@ def test_annotate_vcf_selects_the_only_matching_case_sample_and_filters_reads(tm
         assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
         assert record.samples["CASE"]["SKUA_NON_ALT_FWD"] == 0
         assert record.samples["CONTROL"]["SKUA_ALT_FWD"] is None
+
+
+def test_annotate_vcf_filters_untagged_and_sm_less_read_groups_for_single_sample_alignment(
+    tmp_path,
+) -> None:
+    import pysam
+
+    case_alignment = FakeAlignmentFile(
+        [
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAATAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "case-rg"},
+            ),
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAAAAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "unassigned-rg"},
+            ),
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAAAAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+            ),
+        ],
+        header=FakeAlignmentHeader(
+            [
+                {"ID": "case-rg", "SM": "CASE"},
+                {"ID": "unassigned-rg"},
+            ]
+        ),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    annotate_vcf(case_alignment, vcf_path, output_path=output_path)
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
+        assert record.samples["CASE"]["SKUA_NON_ALT_FWD"] == 0
+        assert record.samples["CASE"]["SKUA_USABLE"] == 1
 
 
 def test_annotate_vcf_requires_explicit_sample_when_multiple_samples_match(tmp_path) -> None:
@@ -922,8 +1002,10 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
                 query_sequence="AAAAATAAAA",
                 query_qualities=[35] * 10,
                 aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "case-rg"},
             )
-        ]
+        ],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
     )
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
@@ -940,6 +1022,7 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
                 "chr1\t108\t.\tA\t<DEL>\t.\tPASS\t.\tGT\t0/1",
                 "chr1\t109\t.\tA\tA]chr2:42]\t.\tPASS\t.\tGT\t0/1",
                 "chr1\t110\t.\tAT\tGCA\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t111\t.\tA\t.\t.\tPASS\t.\tGT\t0/0",
             ]
         )
         + "\n",
@@ -954,19 +1037,21 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
         output_path=output_path,
     )
 
-    assert summary.record_count == 5
+    assert summary.record_count == 6
     assert summary.annotated_record_count == 1
-    assert summary.unsupported_record_count == 4
+    assert summary.unsupported_record_count == 5
     assert summary.unsupported_record_count_by_status == {
         AnnotationStatus.UNSUPPORTED_MULTIALLELIC: 1,
         AnnotationStatus.UNSUPPORTED_SYMBOLIC_ALLELE: 1,
         AnnotationStatus.UNSUPPORTED_BREAKEND: 1,
         AnnotationStatus.UNSUPPORTED_COMPLEX_ALLELE: 1,
+        AnnotationStatus.UNSUPPORTED_RECORD: 1,
     }
     assert summary.format_for_cli() == (
-        "skua: records=5 annotated=1 unsupported=4 "
+        "skua: records=6 annotated=1 unsupported=5 "
         "(UNSUPPORTED_BREAKEND=1, UNSUPPORTED_COMPLEX_ALLELE=1, "
-        "UNSUPPORTED_MULTIALLELIC=1, UNSUPPORTED_SYMBOLIC_ALLELE=1)"
+        "UNSUPPORTED_MULTIALLELIC=1, UNSUPPORTED_RECORD=1, "
+        "UNSUPPORTED_SYMBOLIC_ALLELE=1)"
     )
 
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
@@ -977,6 +1062,7 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
             "UNSUPPORTED_SYMBOLIC_ALLELE",
             "UNSUPPORTED_BREAKEND",
             "UNSUPPORTED_COMPLEX_ALLELE",
+            "UNSUPPORTED_RECORD",
         ]
         assert records[0].samples["CASE"]["SKUA_ALT_FWD"] == 1
         assert "SKUA_ALT_FWD" not in records[1].format
@@ -1024,9 +1110,13 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
             query_sequence="AAAAATAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
         ),
     ]
-    case_alignment = FakeAlignmentFile(case_reads)
+    case_alignment = FakeAlignmentFile(
+        case_reads,
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
 
     normal_reads = [
         FakeRead(
@@ -1035,6 +1125,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
             query_sequence="AAAAAAAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "normal-rg"},
         ),
         FakeRead(
             mapping_quality=5,
@@ -1042,6 +1133,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
             query_sequence="AAAAAAAAAA",
             query_qualities=[35] * 10,
             aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "normal-rg"},
         ),
     ]
     normal_alignment = FakeAlignmentFile(

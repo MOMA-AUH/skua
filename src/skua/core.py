@@ -53,6 +53,7 @@ class AnnotationStatus(str, Enum):
     """Outcome of attempting to annotate one VCF record."""
 
     ANNOTATED = "ANNOTATED"
+    UNSUPPORTED_RECORD = "UNSUPPORTED_RECORD"
     UNSUPPORTED_MULTIALLELIC = "UNSUPPORTED_MULTIALLELIC"
     UNSUPPORTED_SYMBOLIC_ALLELE = "UNSUPPORTED_SYMBOLIC_ALLELE"
     UNSUPPORTED_BREAKEND = "UNSUPPORTED_BREAKEND"
@@ -198,18 +199,15 @@ def _resolve_case_sample(
     *,
     requested_sample_name: str | None,
 ) -> CaseSampleSelection:
-    """Resolve the VCF case sample and isolate it in multi-sample alignments."""
+    """Resolve the VCF case sample and isolate its reads by read group."""
     vcf_sample_names = tuple(vcf_header.samples)
     alignment_sample_names = _alignment_sample_names(alignment_file)
 
     def selection_for(sample_name: str) -> CaseSampleSelection:
-        if len(alignment_sample_names) <= 1:
-            return CaseSampleSelection(sample_name=sample_name, allowed_read_group_ids=None)
-
         read_group_ids = _read_group_ids_for_sample(alignment_file, sample_name)
         if not read_group_ids:
             raise ValueError(
-                f"Case sample {sample_name!r} has no read-group IDs in a multi-sample alignment"
+                f"Case sample {sample_name!r} has no read-group IDs in the case alignment"
             )
         return CaseSampleSelection(
             sample_name=sample_name,
@@ -393,6 +391,8 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
 def _assess_vcf_record(record: Any) -> VcfRecordAnnotation:
     """Return a supported variant or an explicit unsupported-record status."""
     alts = record.alts or ()
+    if not alts:
+        return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_RECORD, None)
     if len(alts) != 1:
         return VcfRecordAnnotation(AnnotationStatus.UNSUPPORTED_MULTIALLELIC, None)
 

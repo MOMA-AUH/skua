@@ -30,10 +30,11 @@ Key input parameters:
 - `--vcf`: Input VCF file to annotate
 - `--alignment`: Case BAM or CRAM file
 - `--normal-list`: Text file with one normal BAM or CRAM path per line
+- `--sample`: Case sample to annotate when VCF/BAM sample matching is ambiguous
 - `--reference`: Reference FASTA file, required when any input alignment is CRAM
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
 
-If the input VCF is site-only and has no samples, skua will add a single output sample using the alignment read-group `SM` tag. This requires exactly one unique `SM` value in the BAM/CRAM header; skua will fail if `SM` is missing or if multiple distinct `SM` values are present.
+Skua resolves a single case sample from the VCF sample names and alignment read-group `SM` tags. Use `--sample` when that resolution is ambiguous; it must name a VCF sample and an alignment sample. For a site-only VCF, skua adds the selected alignment sample as the sole output sample. The selected sample must have at least one read-group `ID` in the alignment header. In all cases, only reads whose `RG` tag names one of those read groups contribute case evidence. Untagged reads and reads from unknown or unassigned read groups are excluded.
 
 Other optional parameters:
 - `--min-baseq` (default `20`): Minimum base quality for read bases
@@ -41,6 +42,7 @@ Other optional parameters:
 - `--truncate` (default `0.1`): Truncation percentile for PON sample inclusion
 - `--pseudocount` (default `sys.float_info.epsilon`): Pseudocount for beta-binomial rate estimates
 - `--prior-variant-probability` (default `0.5`): Prior probability for variant model
+- `--strict`: Fail before writing output if any VCF record cannot be annotated
 
 Alignment records must be mapped primary records from a proper pair. Records
 whose mate is unmapped, or which are marked secondary, supplementary, failed
@@ -64,10 +66,13 @@ Output FORMAT fields:
 - `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models
 
 Output INFO fields:
+- `SKUA_STATUS`: Annotation outcome for every record. `ANNOTATED` records receive Skua evidence; unsupported records are retained with an `UNSUPPORTED_*` status and are not assigned new Skua evidence fields. `UNSUPPORTED_RECORD` includes records with no alternate allele (`ALT=.`).
 - `SKUA_PON_SAMPLE_COUNT`: Number of normal samples included after truncation
 - `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`: Aggregated read counts across normals
 - `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE`: Aggregated usable/unusable counts
 - `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
+
+By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. After a successful `annotate` command, skua writes a summary to standard error, for example `skua: records=12 annotated=10 unsupported=2 (UNSUPPORTED_RECORD=2)`. VCF output is written to `--output` or standard output, so the summary does not contaminate the VCF stream.
 
 ## Python API
 
