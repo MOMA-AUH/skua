@@ -20,6 +20,7 @@ def test_version_is_synced_across_code_and_packaging() -> None:
     )
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     conda_recipe = (ROOT / "conda-recipe" / "meta.yaml").read_text(encoding="utf-8")
+    development_environment = (ROOT / "environment.yml").read_text(encoding="utf-8")
 
     assert pyproject["project"]["dynamic"] == ["version"]
     assert "version" not in pyproject["project"]
@@ -31,3 +32,4 @@ def test_version_is_synced_across_code_and_packaging() -> None:
         r'^\{\%\s*set\s+version\s*=\s*"([^"]+)"\s*\%\}$',
     )
     assert conda_version == package_version
+    assert "  - python >=3.11" in development_environment
