@@ -451,7 +451,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
         assert sample["SKUA_UNUSABLE"] == 0
 
 
-def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
+def test_annotate_vcf_supports_uppercase_bgzipped_output(tmp_path) -> None:
     import pysam
 
     reads = [
@@ -479,7 +479,7 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    output_path = tmp_path / "annotated.vcf.gz"
+    output_path = tmp_path / "annotated.VCF.GZ"
 
     summary = annotate_vcf(
         alignment_file,
@@ -495,6 +495,81 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
         assert sample["SKUA_ALT_FWD"] == 1
+
+
+@pytest.mark.parametrize("use_symlink", [False, True], ids=["same-path", "resolved-same-path"])
+@pytest.mark.parametrize("with_normals", [False, True], ids=["case", "case-with-normals"])
+def test_annotate_vcf_rejects_output_path_that_would_overwrite_input(
+    tmp_path, use_symlink, with_normals
+) -> None:
+    alignment_file = FakeAlignmentFile([])
+    vcf_path = tmp_path / "input.vcf"
+    original_contents = "\n".join(
+        [
+            "##fileformat=VCFv4.2",
+            "##contig=<ID=chr1>",
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+            "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+        ]
+    ) + "\n"
+    vcf_path.write_text(original_contents, encoding="utf-8")
+    output_path = vcf_path
+    if use_symlink:
+        output_path = tmp_path / "output-link.vcf"
+        output_path.symlink_to(vcf_path)
+
+    with pytest.raises(ValueError, match="input VCF"):
+        if with_normals:
+            annotate_vcf_with_normals(
+                alignment_file,
+                vcf_path,
+                normal_alignments=[],
+                output_path=output_path,
+            )
+        else:
+            annotate_vcf(alignment_file, vcf_path, output_path=output_path)
+
+    assert vcf_path.read_text(encoding="utf-8") == original_contents
+
+
+def test_annotate_vcf_counts_lowercase_alleles_as_alt_evidence(tmp_path) -> None:
+    import pysam
+
+    alignment_file = FakeAlignmentFile(
+        [
+            FakeRead(
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAATAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+            ),
+        ]
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\ta\tt\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    annotate_vcf(alignment_file, vcf_path, output_path=output_path)
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        record = next(iter(annotated_vcf))
+        sample = record.samples["CASE"]
+        assert sample["SKUA_ALT_FWD"] == 1
+        assert sample["SKUA_NON_ALT_FWD"] == 0
 
 
 def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> None:

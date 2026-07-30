@@ -14,6 +14,13 @@ def test_variant_from_vcf_fields_converts_pos1_to_pos0() -> None:
     assert variant.alt == "T"
 
 
+def test_variant_from_vcf_fields_normalizes_alleles_to_uppercase() -> None:
+    variant = Variant.from_vcf_fields(contig="chr7", pos1=106, ref="a", alt="t")
+
+    assert variant.ref == "A"
+    assert variant.alt == "T"
+
+
 def test_variant_from_vcf_fields_parses_simple_deletion() -> None:
     variant = Variant.from_vcf_fields(contig="chr1", pos1=10, ref="AT", alt="A")
 

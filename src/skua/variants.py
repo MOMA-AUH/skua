@@ -46,7 +46,7 @@ class Variant:
         if len(ref) != len(alt) and not (len(ref) == 1 or len(alt) == 1):
             raise ValueError("Only simple substitutions and simple indels are supported")
 
-        return cls(contig=contig, ref_pos0=pos1 - 1, ref=ref, alt=alt)
+        return cls(contig=contig, ref_pos0=pos1 - 1, ref=ref.upper(), alt=alt.upper())
 
 
 def parse_vcf_variant_line(line: str) -> Variant | None:

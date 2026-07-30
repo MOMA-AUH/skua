@@ -471,9 +471,28 @@ def _annotate_pon_sample_format_fields(
 
 def _vcf_write_mode(output_path: str | Path) -> str:
     """Return the pysam VariantFile write mode for VCF output path."""
-    if str(output_path).endswith(".gz"):
+    if str(output_path).lower().endswith(".gz"):
         return "wz"
     return "w"
+
+
+def _validate_distinct_vcf_paths(vcf_path: str | Path, output_path: str | Path) -> None:
+    """Reject output paths that would overwrite the VCF being read.
+
+    ``-`` is handled by pysam as a standard stream rather than a filesystem
+    path, so it is intentionally excluded from filesystem identity checks.
+    """
+    if str(vcf_path) == "-" or str(output_path) == "-":
+        return
+
+    input_path = Path(vcf_path)
+    output_path_obj = Path(output_path)
+    try:
+        same_file = input_path.samefile(output_path_obj)
+    except FileNotFoundError:
+        same_file = False
+    if same_file or input_path.resolve() == output_path_obj.resolve():
+        raise ValueError("output_path must not refer to the input VCF")
 
 
 def annotate_vcf(
@@ -489,6 +508,7 @@ def annotate_vcf(
 ) -> AnnotationSummary:
     """Annotate an input VCF with read-count FORMAT fields for variants."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
+    _validate_distinct_vcf_paths(vcf_path, output_path)
     _validate_vcf_against_inputs(
         vcf_path,
         alignment_files=[("Case alignment", alignment_file)],
@@ -564,6 +584,7 @@ def annotate_vcf_with_normals(
         pseudocount=pseudocount,
         prior_variant_probability=prior_variant_probability,
     )
+    _validate_distinct_vcf_paths(vcf_path, output_path)
     _validate_normal_alignment_samples(normal_alignments)
     _validate_vcf_against_inputs(
         vcf_path,
