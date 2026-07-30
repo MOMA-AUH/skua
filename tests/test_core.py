@@ -372,7 +372,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.vcf"
 
-    result = annotate_vcf(
+    summary = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -380,7 +380,7 @@ def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_ALT_FWD" in result.vcf_text
+    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -433,7 +433,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_insertion.vcf"
 
-    result = annotate_vcf(
+    summary = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -441,6 +441,7 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
         min_mapq=20,
     )
 
+    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -480,7 +481,7 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated.vcf.gz"
 
-    result = annotate_vcf(
+    summary = annotate_vcf(
         alignment_file,
         vcf_path,
         output_path=output_path,
@@ -489,7 +490,7 @@ def test_annotate_vcf_supports_bgzipped_output(tmp_path) -> None:
     )
 
     assert output_path.read_bytes()[:2] == b"\x1f\x8b"
-    assert "#CHROM" in result.vcf_text
+    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
@@ -528,7 +529,7 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
     )
     output_path = tmp_path / "annotated_site_only.vcf"
 
-    result = annotate_vcf_with_normals(
+    summary = annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[],
@@ -537,7 +538,7 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
         min_mapq=20,
     )
 
-    assert "SKUA_ARTIFACT_POSTERIOR" in result.vcf_text
+    assert summary.annotated_record_count == 1
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         assert list(annotated_vcf.header.samples) == ["CASE"]
         record = next(iter(annotated_vcf))
@@ -581,6 +582,7 @@ def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_pat
             no_sm_alignment,
             vcf_path,
             normal_alignments=[],
+            output_path=tmp_path / "unused.vcf",
             min_baseq=20,
             min_mapq=20,
         )
@@ -594,6 +596,7 @@ def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_pat
             multi_sm_alignment,
             vcf_path,
             normal_alignments=[],
+            output_path=tmp_path / "unused.vcf",
             min_baseq=20,
             min_mapq=20,
         )
@@ -679,7 +682,7 @@ def test_annotate_vcf_requires_explicit_sample_when_multiple_samples_match(tmp_p
     )
 
     with pytest.raises(ValueError, match="--sample"):
-        annotate_vcf(case_alignment, vcf_path)
+        annotate_vcf(case_alignment, vcf_path, output_path=tmp_path / "unused.vcf")
 
 
 def test_annotate_vcf_rejects_multi_sample_normal_alignment(tmp_path) -> None:
@@ -713,6 +716,7 @@ def test_annotate_vcf_rejects_multi_sample_normal_alignment(tmp_path) -> None:
             case_alignment,
             vcf_path,
             normal_alignments=[normal_alignment],
+            output_path=tmp_path / "unused.vcf",
         )
 
 
@@ -744,7 +748,13 @@ def test_annotate_vcf_with_normals_rejects_invalid_parameters(tmp_path, kwargs, 
     )
 
     with pytest.raises(ValueError, match=message):
-        annotate_vcf_with_normals(alignment_file, vcf_path, normal_alignments=[], **kwargs)
+        annotate_vcf_with_normals(
+            alignment_file,
+            vcf_path,
+            normal_alignments=[],
+            output_path=tmp_path / "unused.vcf",
+            **kwargs,
+        )
 
 
 def test_annotate_vcf_rejects_reference_mismatch_before_writing_output(tmp_path) -> None:
@@ -823,7 +833,7 @@ def test_annotate_vcf_rejects_alignment_without_an_index(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="Case alignment must be indexed"):
-        annotate_vcf(alignment_file, vcf_path)
+        annotate_vcf(alignment_file, vcf_path, output_path=tmp_path / "unused.vcf")
 
 
 def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path) -> None:
@@ -862,14 +872,13 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
     )
     output_path = tmp_path / "annotated.vcf"
 
-    result = annotate_vcf_with_normals(
+    summary = annotate_vcf_with_normals(
         alignment_file,
         vcf_path,
         normal_alignments=[],
         output_path=output_path,
     )
 
-    summary = result.summary
     assert summary.record_count == 5
     assert summary.annotated_record_count == 1
     assert summary.unsupported_record_count == 4
@@ -981,7 +990,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
     )
     output_path = tmp_path / "annotated_pon.vcf"
 
-    result = annotate_vcf_with_normals(
+    summary = annotate_vcf_with_normals(
         case_alignment,
         vcf_path,
         normal_alignments=[normal_alignment],
@@ -990,9 +999,8 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         min_mapq=20,
     )
 
-    assert "SKUA_LOG_BAYES_FACTOR" in result.vcf_text
-    assert "SKUA_ARTIFACT_POSTERIOR" in result.vcf_text
-    
+    assert summary.annotated_record_count == 1
+
     with pysam.VariantFile(str(output_path)) as annotated_vcf:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]

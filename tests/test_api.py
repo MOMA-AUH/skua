@@ -12,7 +12,6 @@ def test_top_level_api_exports_documented_symbols() -> None:
         "Stats",
         "Variant",
         "VariantKind",
-        "VcfAnnotationResult",
         "annotate_variant",
         "annotate_variant_with_normals",
         "annotate_variants_from_vcf",

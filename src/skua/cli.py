@@ -165,11 +165,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.pseudocount is not None:
                 pon_model_kwargs["pseudocount"] = args.pseudocount
             try:
-                result = annotate_vcf_with_normals(
+                summary = annotate_vcf_with_normals(
                     alignment_file,
                     Path(args.vcf),
                     normal_alignments=normal_alignments,
-                    output_path=args.output,
+                    output_path=args.output if args.output is not None else "-",
                     sample_name=args.sample,
                     reference_path=args.reference,
                     strict=args.strict,
@@ -180,9 +180,7 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 parser.error(str(exc))
 
-        if args.output is None:
-            print(result.vcf_text, end="")
-        print(result.summary.format_for_cli(), file=sys.stderr)
+        print(summary.format_for_cli(), file=sys.stderr)
         return 0
 
     parser.error(f"Unknown command: {args.command}")
