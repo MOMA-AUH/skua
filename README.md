@@ -1,6 +1,6 @@
 # skua
 
-[![Conda Version](https://img.shields.io/conda/vn/MOMA-AUH/skua?cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua) [![Conda Downloads](https://img.shields.io/conda/dn/MOMA-AUH/skua?cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua)
+[![Conda Version](https://img.shields.io/conda/vn/MOMA-AUH/skua?style=for-the-badge&cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua) [![Conda Downloads](https://img.shields.io/conda/dn/MOMA-AUH/skua?style=for-the-badge&cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua)
 
 Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads, with support for substitutions, MNVs, and simple insertions and deletions. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
