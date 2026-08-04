@@ -81,7 +81,12 @@ substitutions, MNVs, and simple insertions and deletions.
 
 ```python
 import pysam
-from skua import Variant, annotate_variant, annotate_variant_with_normals
+from skua import (
+    Variant,
+    annotate_variant,
+    annotate_variant_with_normals,
+    annotate_variants,
+)
 
 variant = Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")
 
@@ -98,7 +103,23 @@ with pysam.AlignmentFile("case.bam", "rb") as case_bam:
 
 For batch work, open each alignment once and use
 `annotate_variants_from_vcf()`; this avoids repeatedly opening the same BAM or
-CRAM.
+CRAM. Skua automatically shares an alignment fetch across nearby variants while
+retaining direct per-site fetches for sparse records. For batches already
+represented as `Variant` objects, use `annotate_variants()` directly:
+
+```python
+variants = [
+    Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T"),
+    Variant.from_vcf_fields(contig="chr1", pos1=109, ref="A", alt="C"),
+]
+
+with pysam.AlignmentFile("case.bam", "rb") as case_bam:
+    for variant, evidence in annotate_variants(case_bam, variants):
+        print(variant, evidence.usable)
+```
+
+Use `annotate_variants_with_normals()` for the corresponding case-plus-PON
+workflow.
 
 ## Requirements
 

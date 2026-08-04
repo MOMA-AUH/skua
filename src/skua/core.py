@@ -9,12 +9,17 @@ from typing import Any
 from typing import Callable
 from typing import Iterable
 from typing import Iterator
+from typing import TypeVar
 
 import pysam
 
-from .evidence import AggregatedEvidence, collect_evidence_from_alignment
+from .evidence import (
+    AggregatedEvidence,
+    collect_evidence_from_alignment,
+    collect_evidence_from_alignment_batch,
+)
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
-from .variants import Variant, read_vcf_variant_file
+from .variants import Variant
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -47,6 +52,12 @@ ANNOTATION_STATUS_INFO_FIELD_DEFINITION = (
     "String",
     "Skua annotation status for this VCF record",
 )
+
+_BATCH_MAX_GAP = 100
+_BATCH_MAX_SPAN = 10_000
+_BATCH_MAX_VARIANTS = 256
+
+AnnotationT = TypeVar("AnnotationT")
 
 
 class AnnotationStatus(str, Enum):
@@ -456,7 +467,14 @@ def _annotate_vcf_stream(
     output_path: str | Path,
     sample_name: str | None,
     include_pon_info: bool,
-    annotate_supported_record: Callable[[Any, Variant, CaseSampleSelection], None],
+    build_supported_annotations: Callable[
+        [CaseSampleSelection],
+        Iterator[tuple[Variant, AnnotationT]],
+    ],
+    annotate_supported_record: Callable[
+        [Any, Variant, CaseSampleSelection, AnnotationT],
+        None,
+    ],
 ) -> None:
     """Write an annotated VCF after caller-specific input preflight.
 
@@ -475,6 +493,7 @@ def _annotate_vcf_stream(
         if len(source_vcf.header.samples) == 0:
             site_only_sample_name = case_selection.sample_name
             header.add_sample(site_only_sample_name)
+        supported_annotations = build_supported_annotations(case_selection)
 
         with pysam.VariantFile(
             str(output_path),
@@ -487,8 +506,33 @@ def _annotate_vcf_stream(
                 assessment = _assess_vcf_record(record)
                 record.info["SKUA_STATUS"] = assessment.status.value
                 if assessment.variant is not None:
-                    annotate_supported_record(record, assessment.variant, case_selection)
+                    try:
+                        annotation_variant, annotation = next(supported_annotations)
+                    except StopIteration as exc:
+                        raise RuntimeError(
+                            "Evidence collection ended before the supported VCF records"
+                        ) from exc
+                    if annotation_variant != assessment.variant:
+                        raise RuntimeError(
+                            "Evidence collection returned variants out of VCF order"
+                        )
+                    annotate_supported_record(
+                        record,
+                        assessment.variant,
+                        case_selection,
+                        annotation,
+                    )
                 out_vcf.write(record)
+
+            try:
+                next(supported_annotations)
+            except StopIteration:
+                pass
+            else:
+                raise RuntimeError(
+                    "Evidence collection returned more variants than the supported VCF records"
+                )
+
 
 def annotate_vcf(
     alignment_file: Any,
@@ -515,18 +559,24 @@ def annotate_vcf(
         record: Any,
         variant: Variant,
         case_selection: CaseSampleSelection,
+        annotation: AggregatedEvidence,
     ) -> None:
-        evidence = annotate_variant(
-            alignment_file,
-            variant,
-            min_baseq=min_baseq,
-            min_mapq=min_mapq,
-            allowed_read_group_ids=case_selection.allowed_read_group_ids,
-        )
+        evidence = annotation
         _annotate_read_count_format_fields(
             record,
             evidence,
             sample_name=case_selection.sample_name,
+        )
+
+    def build_supported_annotations(
+        case_selection: CaseSampleSelection,
+    ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
+        return annotate_variants_from_vcf(
+            alignment_file,
+            vcf_path,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
 
     _annotate_vcf_stream(
@@ -535,6 +585,7 @@ def annotate_vcf(
         output_path=output_path,
         sample_name=sample_name,
         include_pon_info=False,
+        build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
     )
 
@@ -582,15 +633,9 @@ def annotate_vcf_with_normals(
         record: Any,
         variant: Variant,
         case_selection: CaseSampleSelection,
+        annotation: PonAnnotation,
     ) -> None:
-        pon_result = annotate_variant_with_normals(
-            alignment_file,
-            variant,
-            normal_alignments=normal_alignments,
-            min_baseq=min_baseq,
-            min_mapq=min_mapq,
-            allowed_read_group_ids=case_selection.allowed_read_group_ids,
-        )
+        pon_result = annotation
         case_evidence = pon_result.case_evidence
         normal_samples_included = truncated_normal_evidences(
             list(pon_result.normal_evidences),
@@ -626,12 +671,25 @@ def annotate_vcf_with_normals(
         record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
         record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
 
+    def build_supported_annotations(
+        case_selection: CaseSampleSelection,
+    ) -> Iterator[tuple[Variant, PonAnnotation]]:
+        return annotate_variants_from_vcf_with_normals(
+            alignment_file,
+            vcf_path,
+            normal_alignments=normal_alignments,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
+        )
+
     _annotate_vcf_stream(
         alignment_file,
         vcf_path,
         output_path=output_path,
         sample_name=sample_name,
         include_pon_info=True,
+        build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
     )
 
@@ -655,6 +713,99 @@ def annotate_variant(
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
     )
+
+
+def _variant_batches(
+    variants: Iterable[Variant],
+    *,
+    max_gap: int = _BATCH_MAX_GAP,
+    max_span: int = _BATCH_MAX_SPAN,
+    max_variants: int = _BATCH_MAX_VARIANTS,
+) -> Iterator[tuple[Variant, ...]]:
+    """Group adjacent, coordinate-sorted variants into conservative batches."""
+    current_batch: list[Variant] = []
+    for variant in variants:
+        if not current_batch:
+            current_batch.append(variant)
+            continue
+
+        first = current_batch[0]
+        previous = current_batch[-1]
+        gap = variant.ref_pos0 - previous.ref_pos0
+        span = variant.ref_pos0 - first.ref_pos0 + 1
+        if (
+            variant.contig != previous.contig
+            or gap < 0
+            or gap > max_gap
+            or span > max_span
+            or len(current_batch) >= max_variants
+        ):
+            yield tuple(current_batch)
+            current_batch = [variant]
+            continue
+
+        current_batch.append(variant)
+
+    if current_batch:
+        yield tuple(current_batch)
+
+
+def _supported_variants_from_vcf(vcf_path: str | Path) -> Iterator[Variant]:
+    """Yield exactly the VCF variants supported by the annotation workflow."""
+    with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        for record in source_vcf:
+            assessment = _assess_vcf_record(record)
+            if assessment.variant is not None:
+                yield assessment.variant
+
+
+def _collect_variant_batch(
+    alignment_file: Any,
+    variant_batch: tuple[Variant, ...],
+    *,
+    min_baseq: int,
+    min_mapq: int,
+    allowed_read_group_ids: frozenset[str] | None,
+) -> tuple[AggregatedEvidence, ...]:
+    """Collect one already-planned batch, retaining the site path for singletons."""
+    if len(variant_batch) == 1:
+        return (
+            annotate_variant(
+                alignment_file,
+                variant_batch[0],
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+                allowed_read_group_ids=allowed_read_group_ids,
+            ),
+        )
+    return collect_evidence_from_alignment_batch(
+        alignment_file,
+        variant_batch,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
+
+
+def annotate_variants(
+    alignment_file: Any,
+    variants: Iterable[Variant],
+    *,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
+) -> Iterator[tuple[Variant, AggregatedEvidence]]:
+    """Yield evidence in input order, batching nearby coordinate-sorted variants."""
+    for variant_batch in _variant_batches(variants):
+        evidences = _collect_variant_batch(
+            alignment_file,
+            variant_batch,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=allowed_read_group_ids,
+        )
+
+        yield from zip(variant_batch, evidences, strict=True)
 
 
 def annotate_variant_with_normals(
@@ -725,18 +876,16 @@ def annotate_variants_from_vcf(
     *,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
     """Yield per-variant evidence for variant records from a VCF file."""
-    for variant in read_vcf_variant_file(vcf_path):
-        yield (
-            variant,
-            annotate_variant(
-                alignment_file,
-                variant,
-                min_baseq=min_baseq,
-                min_mapq=min_mapq,
-            ),
-        )
+    yield from annotate_variants(
+        alignment_file,
+        _supported_variants_from_vcf(vcf_path),
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
 
 
 def format_annotation_results(
@@ -838,6 +987,54 @@ def annotate_vcf_to_json(
         output_path=output_path,
     )
 
+
+def annotate_variants_with_normals(
+    alignment_file: Any,
+    variants: Iterable[Variant],
+    *,
+    normal_alignments: list[Any] | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
+) -> Iterator[tuple[Variant, PonAnnotation]]:
+    """Yield case and PON evidence while sharing fetches across dense variants."""
+    if normal_alignments is None:
+        normal_alignments = []
+
+    for variant_batch in _variant_batches(variants):
+        case_evidences = _collect_variant_batch(
+            alignment_file,
+            variant_batch,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=allowed_read_group_ids,
+        )
+        normal_evidences_by_alignment = [
+            _collect_variant_batch(
+                normal_alignment,
+                variant_batch,
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+                allowed_read_group_ids=None,
+            )
+            for normal_alignment in normal_alignments
+        ]
+
+        for variant_index, variant in enumerate(variant_batch):
+            normal_evidences = tuple(
+                evidences[variant_index]
+                for evidences in normal_evidences_by_alignment
+            )
+            yield (
+                variant,
+                PonAnnotation(
+                    case_evidence=case_evidences[variant_index],
+                    normal_evidences=normal_evidences,
+                    normal_aggregate_evidence=aggregate_evidence(list(normal_evidences)),
+                ),
+            )
+
+
 def annotate_variants_from_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
@@ -845,22 +1042,17 @@ def annotate_variants_from_vcf_with_normals(
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield per-variant case+normal evidence for variant records from a VCF file."""
-    if normal_alignments is None:
-        normal_alignments = []
-
-    for variant in read_vcf_variant_file(vcf_path):
-        yield (
-            variant,
-            annotate_variant_with_normals(
-                alignment_file,
-                variant,
-                normal_alignments=normal_alignments,
-                min_baseq=min_baseq,
-                min_mapq=min_mapq,
-            ),
-        )
+    yield from annotate_variants_with_normals(
+        alignment_file,
+        _supported_variants_from_vcf(vcf_path),
+        normal_alignments=normal_alignments,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
 
 
 def format_annotation_results_with_normals(

@@ -13,6 +13,8 @@ def test_top_level_api_exports_documented_symbols() -> None:
         "VariantKind",
         "annotate_variant",
         "annotate_variant_with_normals",
+        "annotate_variants",
+        "annotate_variants_with_normals",
         "annotate_variants_from_vcf",
         "annotate_vcf",
         "annotate_vcf_with_normals",

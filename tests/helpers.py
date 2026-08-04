@@ -16,6 +16,7 @@ class FakeRead:
     query_sequence: str
     query_qualities: list[int]
     aligned_pairs: list[tuple[int | None, int | None]]
+    query_name: str | None = None
     flag: int = 0x3
     tags: dict[str, str] = field(default_factory=dict)
 
