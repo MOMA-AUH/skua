@@ -1,10 +1,14 @@
 """Read-level evidence classification primitives for variant verification."""
 
+from bisect import bisect_left
 from collections import Counter
 from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, IntFlag
 from typing import Any
+
+from .variants import Variant
 
 
 class AlleleSupport(str, Enum):
@@ -477,3 +481,104 @@ def collect_evidence_from_alignment(
         fragment_calls.append(_resolve_fragment_call(read_calls))
 
     return aggregate_read_calls(fragment_calls)
+
+
+def _read_reference_span(read: Any) -> tuple[int, int] | None:
+    """Return the half-open reference span covered by an alignment record."""
+    reference_start = getattr(read, "reference_start", None)
+    reference_end = getattr(read, "reference_end", None)
+    if reference_start is not None and reference_end is not None:
+        return int(reference_start), int(reference_end)
+
+    reference_positions = [
+        ref_pos
+        for _query_pos, ref_pos in read.aligned_pairs
+        if ref_pos is not None
+    ]
+    if not reference_positions:
+        return None
+    return min(reference_positions), max(reference_positions) + 1
+
+
+def collect_evidence_from_alignment_batch(
+    alignment_file: Any,
+    variants: Sequence[Variant],
+    *,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
+) -> tuple[AggregatedEvidence, ...]:
+    """Collect evidence for same-contig variants with one alignment fetch.
+
+    Results correspond positionally to ``variants``. Each variant retains the
+    same read filtering and fragment-resolution semantics as
+    :func:`collect_evidence_from_alignment`.
+    """
+    if not variants:
+        return ()
+
+    contig = variants[0].contig
+    if any(variant.contig != contig for variant in variants):
+        raise ValueError("A variant batch must contain exactly one contig")
+
+    sorted_variants = sorted(
+        enumerate(variants),
+        key=lambda indexed_variant: indexed_variant[1].ref_pos0,
+    )
+    sorted_positions = [variant.ref_pos0 for _index, variant in sorted_variants]
+    fragments_by_variant: list[dict[Any, list[tuple[Any, ReadAlleleCall]]]] = [
+        {} for _variant in variants
+    ]
+    unnamed_read_index = 0
+
+    for read in alignment_file.fetch(
+        contig,
+        sorted_positions[0],
+        sorted_positions[-1] + 1,
+    ):
+        if not is_accepted_sam_flag(read.flag):
+            continue
+        read_group_id = _read_group_id(read)
+        if (
+            allowed_read_group_ids is not None
+            and read_group_id not in allowed_read_group_ids
+        ):
+            continue
+
+        reference_span = _read_reference_span(read)
+        if reference_span is None:
+            continue
+        reference_start, reference_end = reference_span
+        first_variant = bisect_left(sorted_positions, reference_start)
+        after_last_variant = bisect_left(sorted_positions, reference_end)
+        if first_variant == after_last_variant:
+            continue
+
+        query_name = getattr(read, "query_name", None)
+        if query_name is None:
+            fragment_key: Any = (None, unnamed_read_index)
+            unnamed_read_index += 1
+        else:
+            fragment_key = (read_group_id, query_name)
+
+        for sorted_variant_index in range(first_variant, after_last_variant):
+            original_index, variant = sorted_variants[sorted_variant_index]
+            read_call = classify_variant_read(
+                read,
+                ref_pos0=variant.ref_pos0,
+                ref_base=variant.ref,
+                alt_base=variant.alt,
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+            )
+            fragments_by_variant[original_index].setdefault(fragment_key, []).append(
+                (read, read_call)
+            )
+
+    return tuple(
+        aggregate_read_calls(
+            _resolve_fragment_call(read_calls)
+            for read_calls in fragment_calls.values()
+        )
+        for fragment_calls in fragments_by_variant
+    )

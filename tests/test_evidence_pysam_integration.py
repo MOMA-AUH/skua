@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pysam
 
-from skua.evidence import UnusableReason, collect_evidence_from_alignment
+from skua.evidence import (
+    UnusableReason,
+    collect_evidence_from_alignment,
+    collect_evidence_from_alignment_batch,
+)
+from skua.variants import Variant
 
 
 HEADER = {
@@ -99,6 +104,47 @@ def test_collect_evidence_from_alignment_with_real_bam(tmp_path: Path) -> None:
     assert counts.non_alt_reverse == 1
     assert counts.usable == 3
     assert counts.unusable == 0
+
+
+def test_batch_collection_matches_site_collection_with_real_bam(tmp_path: Path) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="alt-both",
+                query_sequence="AAAAATAACA",
+                reference_start=100,
+            ),
+            build_aligned_segment(
+                query_name="ref-both",
+                query_sequence="AAAAAAAAAA",
+                reference_start=100,
+                is_reverse=True,
+            ),
+        ],
+    )
+    variants = (
+        Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
+        Variant(contig="chr1", ref_pos0=108, ref="A", alt="C"),
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        batch_evidences = collect_evidence_from_alignment_batch(
+            alignment_file,
+            variants,
+        )
+        site_evidences = tuple(
+            collect_evidence_from_alignment(
+                alignment_file,
+                contig=variant.contig,
+                ref_pos0=variant.ref_pos0,
+                ref_base=variant.ref,
+                alt_base=variant.alt,
+            )
+            for variant in variants
+        )
+
+    assert batch_evidences == site_evidences
 
 
 

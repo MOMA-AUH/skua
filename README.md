@@ -98,7 +98,10 @@ with pysam.AlignmentFile("case.bam", "rb") as case_bam:
 
 For batch work, open each alignment once and use
 `annotate_variants_from_vcf()`; this avoids repeatedly opening the same BAM or
-CRAM.
+CRAM. Skua automatically shares an alignment fetch across nearby variants while
+retaining direct per-site fetches for sparse records. Code that already has
+`Variant` objects can use `annotate_variants()` or
+`annotate_variants_with_normals()` directly.
 
 ## Requirements
 

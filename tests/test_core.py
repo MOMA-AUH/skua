@@ -104,7 +104,32 @@ def test_annotate_variants_from_vcf_processes_simple_records_only(tmp_path) -> N
         Variant(contig="chr1", ref_pos0=199, ref="A", alt="AT"),
         Variant(contig="chr1", ref_pos0=299, ref="AT", alt="A"),
     ]
-    assert alignment_file.fetch_calls == [("chr1", 105, 106), ("chr1", 199, 200), ("chr1", 299, 300)]
+    assert alignment_file.fetch_calls == [("chr1", 105, 300)]
+
+
+def test_annotate_variants_from_vcf_keeps_sparse_variants_as_site_fetches(tmp_path) -> None:
+    alignment_file = FakeAlignmentFile([])
+    vcf_path = tmp_path / "sparse.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+                "chr1\t1001\t.\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    list(annotate_variants_from_vcf(alignment_file, vcf_path))
+
+    assert alignment_file.fetch_calls == [
+        ("chr1", 105, 106),
+        ("chr1", 1000, 1001),
+    ]
 
 
 def test_format_annotation_results_returns_json_ready_records() -> None:
@@ -1157,6 +1182,69 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         assert record.info["SKUA_PON_USABLE"] == 1
         assert record.info["SKUA_PON_UNUSABLE"] == 1
         assert record.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
+
+
+def test_annotate_vcf_with_normals_batches_dense_records_per_alignment(tmp_path) -> None:
+    import pysam
+
+    case_alignment = FakeAlignmentFile(
+        [
+            FakeRead(
+                query_name="case-alt",
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAATAACA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "case-rg"},
+            )
+        ],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    normal_alignment = FakeAlignmentFile(
+        [
+            FakeRead(
+                query_name="normal-ref",
+                mapping_quality=60,
+                is_reverse=False,
+                query_sequence="AAAAAAAAAA",
+                query_qualities=[35] * 10,
+                aligned_pairs=build_linear_pairs(10, 100),
+                tags={"RG": "normal-rg"},
+            )
+        ],
+        header=FakeAlignmentHeader([{"ID": "normal-rg", "SM": "NORMAL"}]),
+    )
+    vcf_path = tmp_path / "dense.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t109\t.\tA\tC\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "dense.annotated.vcf"
+
+    annotate_vcf_with_normals(
+        case_alignment,
+        vcf_path,
+        normal_alignments=[normal_alignment],
+        output_path=output_path,
+    )
+
+    assert case_alignment.fetch_calls == [("chr1", 105, 109)]
+    assert normal_alignment.fetch_calls == [("chr1", 105, 109)]
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        records = list(annotated_vcf)
+        assert [record.samples["CASE"]["SKUA_ALT_FWD"] for record in records] == [1, 1]
+        assert [record.info["SKUA_PON_NON_ALT_FWD"] for record in records] == [1, 1]
 
 
 def test_annotate_variant_with_normals_returns_case_and_normal_evidence() -> None:
