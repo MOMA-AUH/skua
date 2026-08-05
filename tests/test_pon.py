@@ -205,32 +205,7 @@ def test_precomputed_pon_matches_live_normal_annotation(tmp_path) -> None:
             assert cached.samples["CASE"][field] == live.samples["CASE"][field]
 
 
-def test_annotate_vcf_with_pon_requires_matching_evidence_thresholds(tmp_path) -> None:
-    target_path = tmp_path / "hotspots.vcf"
-    pon_path = tmp_path / "hotspots.pon.bcf"
-    _write_targets(target_path)
-    build_pon(
-        target_path,
-        normal_alignments=[_normal("N1", [])],
-        output_path=pon_path,
-        min_baseq=25,
-    )
-    case = FakeAlignmentFile(
-        [],
-        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
-        references=("chr1",),
-    )
-
-    with pytest.raises(ValueError, match="must match the PON artifact"):
-        annotate_vcf_with_pon(
-            case,
-            pon_path,
-            output_path=tmp_path / "unused.vcf",
-            min_baseq=20,
-        )
-
-
-def test_annotate_vcf_with_pon_inherits_omitted_evidence_thresholds(tmp_path) -> None:
+def test_annotate_vcf_with_pon_uses_artifact_evidence_thresholds(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"
     output_path = tmp_path / "calls.vcf"

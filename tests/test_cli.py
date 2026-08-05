@@ -81,12 +81,32 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
             "output_path": "calls.vcf.gz",
             "sample_name": None,
             "reference_path": None,
-            "min_baseq": None,
-            "min_mapq": None,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
         }
     ]
+
+
+def test_main_annotate_rejects_evidence_thresholds_with_pon(capsys) -> None:
+    for threshold_option in ("--min-baseq", "--min-mapq"):
+        try:
+            cli.main(
+                [
+                    "annotate",
+                    "--alignment",
+                    "case.bam",
+                    "--pon",
+                    "hotspots.pon.bcf",
+                    threshold_option,
+                    "20",
+                ]
+            )
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"Expected {threshold_option} to conflict with --pon")
+
+        assert "cannot be used with --pon" in capsys.readouterr().err
 
 
 def test_main_pon_build_opens_normals_and_writes_bcf(monkeypatch, tmp_path) -> None:

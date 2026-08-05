@@ -39,7 +39,7 @@ def _add_evidence_arguments(
     default: int | None,
 ) -> None:
     inherited_help = (
-        "; inherited from --pon or 20 with --normal-list"
+        "; defaults to 20 with --normal-list and cannot be used with --pon"
         if default is None
         else ""
     )
@@ -230,6 +230,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.pon is not None and (
+        args.min_baseq is not None or args.min_mapq is not None
+    ):
+        parser.error(
+            "--min-baseq and --min-mapq cannot be used with --pon; "
+            "the PON defines both thresholds"
+        )
     _validate_parameters(parser, args, include_model=True)
     _validate_vcf_output(parser, args.output)
     if args.normal_list is not None and args.vcf is None:
@@ -260,8 +267,6 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     output_path=args.output if args.output is not None else "-",
                     sample_name=args.sample,
                     reference_path=args.reference,
-                    min_baseq=args.min_baseq,
-                    min_mapq=args.min_mapq,
                     **_pon_model_kwargs(args),
                 )
             else:

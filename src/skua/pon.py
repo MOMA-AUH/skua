@@ -87,6 +87,8 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         min_mapq = int(items["MinMapQ"])
     except ValueError as exc:
         raise ValueError("PON artifact contains invalid integer metadata") from exc
+    if min_baseq < 0 or min_mapq < 0:
+        raise ValueError("PON artifact contains negative evidence thresholds")
 
     if schema_version != PON_SCHEMA_VERSION:
         raise ValueError(
