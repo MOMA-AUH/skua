@@ -1,3 +1,4 @@
+import skua.evidence as evidence_module
 from skua.evidence import (
     UnusableReason,
     collect_evidence_from_alignment,
@@ -166,6 +167,45 @@ def test_batch_collection_fetches_dense_variants_once_with_site_parity() -> None
 
     assert batch_alignment.fetch_calls == [("chr1", 105, 109)]
     assert batch_evidences == site_evidences
+
+
+def test_batch_collection_builds_each_read_position_map_once(monkeypatch) -> None:
+    variants = (
+        Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
+        Variant(contig="chr1", ref_pos0=108, ref="A", alt="C"),
+    )
+    reads = [
+        FakeRead(
+            query_name="alt-both",
+            mapping_quality=60,
+            is_reverse=False,
+            query_sequence="AAAAATAACA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+        FakeRead(
+            query_name="ref-both",
+            mapping_quality=60,
+            is_reverse=True,
+            query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10,
+            aligned_pairs=build_linear_pairs(10, 100),
+        ),
+    ]
+    alignment = FakeAlignmentFile(reads)
+    original_ref_position_map = evidence_module._ref_position_map
+    calls = 0
+
+    def count_ref_position_maps(read):
+        nonlocal calls
+        calls += 1
+        return original_ref_position_map(read)
+
+    monkeypatch.setattr(evidence_module, "_ref_position_map", count_ref_position_maps)
+
+    collect_evidence_from_alignment_batch(alignment, variants)
+
+    assert calls == len(reads)
 
 
 def test_batch_collection_preserves_fragment_and_read_group_semantics() -> None:

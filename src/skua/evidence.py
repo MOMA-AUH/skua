@@ -185,9 +185,16 @@ def _ref_position_map(read: Any) -> dict[int, int | None]:
     return ref_to_query
 
 
-def _query_positions_for_ref_span(read: Any, *, ref_pos0: int, ref_span_len: int) -> list[int] | None:
+def _query_positions_for_ref_span(
+    read: Any,
+    *,
+    ref_pos0: int,
+    ref_span_len: int,
+    ref_to_query: dict[int, int | None] | None = None,
+) -> list[int] | None:
     """Return query positions covering a contiguous reference span, if fully aligned."""
-    ref_to_query = _ref_position_map(read)
+    if ref_to_query is None:
+        ref_to_query = _ref_position_map(read)
     query_positions: list[int] = []
     for target_ref_pos in range(ref_pos0, ref_pos0 + ref_span_len):
         if target_ref_pos not in ref_to_query or ref_to_query[target_ref_pos] is None:
@@ -227,8 +234,13 @@ def classify_variant_read(
     alt_base: str,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    ref_to_query: dict[int, int | None] | None = None,
 ) -> ReadAlleleCall:
-    """Classify one read as ALT, NON_ALT, or UNUSABLE for a variant."""
+    """Classify one read as ALT, NON_ALT, or UNUSABLE for a variant.
+
+    ``ref_to_query`` can be supplied by a batch caller to reuse a read's
+    aligned-pair map across every variant that the read overlaps.
+    """
     if read.mapping_quality < min_mapq:
         return ReadAlleleCall(
             support=AlleleSupport.UNUSABLE,
@@ -241,7 +253,12 @@ def classify_variant_read(
 
     # Simple substitutions, including MNVs.
     if ref_len == alt_len:
-        query_positions = _query_positions_for_ref_span(read, ref_pos0=ref_pos0, ref_span_len=ref_len)
+        query_positions = _query_positions_for_ref_span(
+            read,
+            ref_pos0=ref_pos0,
+            ref_span_len=ref_len,
+            ref_to_query=ref_to_query,
+        )
         if query_positions is None:
             return ReadAlleleCall(
                 support=AlleleSupport.UNUSABLE,
@@ -272,7 +289,12 @@ def classify_variant_read(
 
     # Simple insertion.
     if ref_len == 1 and alt_len > 1:
-        query_positions = _query_positions_for_ref_span(read, ref_pos0=ref_pos0, ref_span_len=1)
+        query_positions = _query_positions_for_ref_span(
+            read,
+            ref_pos0=ref_pos0,
+            ref_span_len=1,
+            ref_to_query=ref_to_query,
+        )
         if query_positions is None:
             return ReadAlleleCall(
                 support=AlleleSupport.UNUSABLE,
@@ -317,7 +339,8 @@ def classify_variant_read(
 
     # Simple deletion.
     if ref_len > 1 and alt_len == 1:
-        ref_to_query = _ref_position_map(read)
+        if ref_to_query is None:
+            ref_to_query = _ref_position_map(read)
         if ref_pos0 not in ref_to_query or ref_to_query[ref_pos0] is None:
             return ReadAlleleCall(
                 support=AlleleSupport.UNUSABLE,
@@ -561,6 +584,12 @@ def collect_evidence_from_alignment_batch(
         else:
             fragment_key = (read_group_id, query_name)
 
+        ref_to_query = (
+            _ref_position_map(read)
+            if read.mapping_quality >= min_mapq
+            else None
+        )
+
         for sorted_variant_index in range(first_variant, after_last_variant):
             original_index, variant = sorted_variants[sorted_variant_index]
             read_call = classify_variant_read(
@@ -570,6 +599,7 @@ def collect_evidence_from_alignment_batch(
                 alt_base=variant.alt,
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
+                ref_to_query=ref_to_query,
             )
             fragments_by_variant[original_index].setdefault(fragment_key, []).append(
                 (read, read_call)
