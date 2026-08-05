@@ -33,9 +33,28 @@ class OptionalDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return help_text
 
 
-def _add_evidence_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--min-baseq", type=int, default=20, help="Minimum base quality")
-    parser.add_argument("--min-mapq", type=int, default=20, help="Minimum mapping quality")
+def _add_evidence_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    default: int | None,
+) -> None:
+    inherited_help = (
+        "; inherited from --pon or 20 with --normal-list"
+        if default is None
+        else ""
+    )
+    parser.add_argument(
+        "--min-baseq",
+        type=int,
+        default=default,
+        help="Minimum base quality" + inherited_help,
+    )
+    parser.add_argument(
+        "--min-mapq",
+        type=int,
+        default=default,
+        help="Minimum mapping quality" + inherited_help,
+    )
 
 
 def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
@@ -171,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--pon",
         help="Precomputed PON BCF; its records define the target variants",
     )
-    _add_evidence_arguments(annotate_parser)
+    _add_evidence_arguments(annotate_parser, default=None)
     _add_model_arguments(annotate_parser)
     annotate_parser.add_argument(
         "--strict",
@@ -205,7 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference",
         help="Reference FASTA path (required for CRAM)",
     )
-    _add_evidence_arguments(pon_build_parser)
+    _add_evidence_arguments(pon_build_parser, default=20)
 
     return parser
 
@@ -246,6 +265,8 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     **_pon_model_kwargs(args),
                 )
             else:
+                min_baseq = args.min_baseq if args.min_baseq is not None else 20
+                min_mapq = args.min_mapq if args.min_mapq is not None else 20
                 normal_alignments = [
                     stack.enter_context(
                         pysam.AlignmentFile(path, "rb", **alignment_kwargs)
@@ -260,8 +281,8 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     sample_name=args.sample,
                     reference_path=args.reference,
                     strict=args.strict,
-                    min_baseq=args.min_baseq,
-                    min_mapq=args.min_mapq,
+                    min_baseq=min_baseq,
+                    min_mapq=min_mapq,
                     **_pon_model_kwargs(args),
                 )
         except ValueError as exc:

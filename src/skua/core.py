@@ -18,7 +18,12 @@ from .evidence import (
     collect_evidence_from_alignment,
     collect_evidence_from_alignment_batch,
 )
-from .pon import read_pon_evidence, read_pon_metadata, write_pon_artifact
+from .pon import (
+    PonArtifactMetadata,
+    read_pon_evidence,
+    read_pon_metadata,
+    write_pon_artifact,
+)
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
 from .variants import Variant
 
@@ -240,16 +245,16 @@ def _validate_normal_alignment_samples(normal_alignments: list[Any]) -> None:
 
 def _validate_annotation_parameters(
     *,
-    min_baseq: int,
-    min_mapq: int,
+    min_baseq: int | None,
+    min_mapq: int | None,
     truncate: float | None = None,
     pseudocount: float | None = None,
     prior_variant_probability: float | None = None,
 ) -> None:
     """Reject parameter values whose semantics are undefined for annotation."""
-    if min_baseq < 0:
+    if min_baseq is not None and min_baseq < 0:
         raise ValueError("min_baseq must be >= 0")
-    if min_mapq < 0:
+    if min_mapq is not None and min_mapq < 0:
         raise ValueError("min_mapq must be >= 0")
     if truncate is not None and not 0.0 < truncate <= 1.0:
         raise ValueError("truncate must be greater than 0 and no greater than 1")
@@ -991,23 +996,23 @@ def annotate_variants_from_pon(
     alignment_file: Any,
     pon_path: str | Path,
     *,
-    min_baseq: int = 20,
-    min_mapq: int = 20,
+    min_baseq: int | None = None,
+    min_mapq: int | None = None,
     allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield case evidence paired with cached per-normal evidence."""
     metadata = read_pon_metadata(pon_path)
-    if metadata.min_baseq != min_baseq or metadata.min_mapq != min_mapq:
-        raise ValueError(
-            "Case evidence thresholds must match the PON artifact "
-            f"(min_baseq={metadata.min_baseq}, min_mapq={metadata.min_mapq})"
-        )
+    resolved_min_baseq, resolved_min_mapq = _resolve_pon_evidence_thresholds(
+        metadata,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+    )
 
     case_results = annotate_variants_from_vcf(
         alignment_file,
         pon_path,
-        min_baseq=min_baseq,
-        min_mapq=min_mapq,
+        min_baseq=resolved_min_baseq,
+        min_mapq=resolved_min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
     )
     for (case_variant, case_evidence), (pon_variant, normal_evidences) in zip(
@@ -1024,6 +1029,26 @@ def annotate_variants_from_pon(
         )
 
 
+def _resolve_pon_evidence_thresholds(
+    metadata: PonArtifactMetadata,
+    *,
+    min_baseq: int | None,
+    min_mapq: int | None,
+) -> tuple[int, int]:
+    """Inherit omitted thresholds and reject explicit PON incompatibilities."""
+    if min_baseq is not None and metadata.min_baseq != min_baseq:
+        raise ValueError(
+            f"Case min_baseq={min_baseq} must match the PON artifact value "
+            f"{metadata.min_baseq}"
+        )
+    if min_mapq is not None and metadata.min_mapq != min_mapq:
+        raise ValueError(
+            f"Case min_mapq={min_mapq} must match the PON artifact value "
+            f"{metadata.min_mapq}"
+        )
+    return metadata.min_baseq, metadata.min_mapq
+
+
 def annotate_vcf_with_pon(
     alignment_file: Any,
     pon_path: str | Path,
@@ -1031,8 +1056,8 @@ def annotate_vcf_with_pon(
     output_path: str | Path,
     sample_name: str | None = None,
     reference_path: str | Path | None = None,
-    min_baseq: int = 20,
-    min_mapq: int = 20,
+    min_baseq: int | None = None,
+    min_mapq: int | None = None,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
@@ -1046,11 +1071,11 @@ def annotate_vcf_with_pon(
         prior_variant_probability=prior_variant_probability,
     )
     metadata = read_pon_metadata(pon_path)
-    if metadata.min_baseq != min_baseq or metadata.min_mapq != min_mapq:
-        raise ValueError(
-            "Case evidence thresholds must match the PON artifact "
-            f"(min_baseq={metadata.min_baseq}, min_mapq={metadata.min_mapq})"
-        )
+    resolved_min_baseq, resolved_min_mapq = _resolve_pon_evidence_thresholds(
+        metadata,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+    )
     _validate_distinct_vcf_paths(pon_path, output_path)
     _validate_vcf_against_inputs(
         pon_path,
@@ -1084,8 +1109,8 @@ def annotate_vcf_with_pon(
         return annotate_variants_from_pon(
             alignment_file,
             pon_path,
-            min_baseq=min_baseq,
-            min_mapq=min_mapq,
+            min_baseq=resolved_min_baseq,
+            min_mapq=resolved_min_mapq,
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
 

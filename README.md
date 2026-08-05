@@ -100,11 +100,12 @@ Construction also writes a companion `.bcf.csi` index; target records must be
 coordinate-sorted.
 
 The PON records define the targets in cached mode, so `--vcf` is omitted from
-the second command. `--min-baseq` and `--min-mapq` used for the case must match
-the values stored when the PON was built. PON construction rejects unsupported
-or multiallelic target records and requires a unique read-group `SM` name in
-each normal alignment. A PON should be rebuilt when the reference assembly,
-alignment/evidence policy, or quality thresholds change.
+the second command. When `--min-baseq` and `--min-mapq` are omitted, the case
+inherits the values stored in the PON. Explicit values must match the stored
+values. PON construction rejects unsupported or multiallelic target records and
+requires a unique read-group `SM` name in each normal alignment. A PON should be
+rebuilt when the reference assembly, alignment/evidence policy, or quality
+thresholds change.
 
 ## Python API
 

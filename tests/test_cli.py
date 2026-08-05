@@ -81,8 +81,8 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
             "output_path": "calls.vcf.gz",
             "sample_name": None,
             "reference_path": None,
-            "min_baseq": 20,
-            "min_mapq": 20,
+            "min_baseq": None,
+            "min_mapq": None,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
         }

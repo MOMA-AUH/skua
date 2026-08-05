@@ -230,6 +230,34 @@ def test_annotate_vcf_with_pon_requires_matching_evidence_thresholds(tmp_path) -
         )
 
 
+def test_annotate_vcf_with_pon_inherits_omitted_evidence_thresholds(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    pon_path = tmp_path / "hotspots.pon.bcf"
+    output_path = tmp_path / "calls.vcf"
+    _write_targets(target_path)
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [])],
+        output_path=pon_path,
+        min_baseq=25,
+        min_mapq=30,
+    )
+    case_read = _read("AAAAATAAAA", read_group="case-rg")
+    case_read.mapping_quality = 29
+    case = FakeAlignmentFile(
+        [case_read],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+
+    annotate_vcf_with_pon(case, pon_path, output_path=output_path)
+
+    with pysam.VariantFile(str(output_path)) as calls:
+        record = next(iter(calls))
+        assert record.samples["CASE"]["SKUA_USABLE"] == 0
+        assert record.samples["CASE"]["SKUA_UNUSABLE"] == 1
+
+
 def test_build_pon_rejects_duplicate_normal_sample_names(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     _write_targets(target_path)
