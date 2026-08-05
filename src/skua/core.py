@@ -18,6 +18,7 @@ from .evidence import (
     collect_evidence_from_alignment,
     collect_evidence_from_alignment_batch,
 )
+from .pon import read_pon_evidence, read_pon_metadata, write_pon_artifact
 from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
 from .variants import Variant
 
@@ -434,6 +435,48 @@ def _annotate_pon_sample_format_fields(
     sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
 
 
+def _annotate_pon_record(
+    record: Any,
+    annotation: PonAnnotation,
+    *,
+    sample_name: str,
+    truncate: float,
+    pseudocount: float,
+    prior_variant_probability: float,
+) -> None:
+    """Annotate one case record from live or precomputed normal evidence."""
+    case_evidence = annotation.case_evidence
+    normal_samples_included = truncated_normal_evidences(
+        list(annotation.normal_evidences),
+        truncate=truncate,
+    )
+    normal_output_evidence = aggregate_evidence(normal_samples_included)
+    stats = compute_stats(
+        case_evidence,
+        normal_output_evidence,
+        per_sample_evidences=list(annotation.normal_evidences),
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_variant_probability=prior_variant_probability,
+    )
+
+    _annotate_read_count_format_fields(record, case_evidence, sample_name=sample_name)
+    _annotate_pon_sample_format_fields(
+        record,
+        sample_name=sample_name,
+        artifact_posterior=stats.artifact_posterior,
+        log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
+    )
+    record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
+    record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
+    record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
+    record.info["SKUA_PON_NON_ALT_FWD"] = normal_output_evidence.non_alt_forward
+    record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
+    record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
+    record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
+    record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
+
+
 def _vcf_write_mode(output_path: str | Path) -> str:
     """Return the pysam VariantFile write mode for VCF output path."""
     if str(output_path).lower().endswith(".gz"):
@@ -467,6 +510,7 @@ def _annotate_vcf_stream(
     output_path: str | Path,
     sample_name: str | None,
     include_pon_info: bool,
+    strip_input_samples: bool,
     build_supported_annotations: Callable[
         [CaseSampleSelection],
         Iterator[tuple[Variant, AnnotationT]],
@@ -483,6 +527,8 @@ def _annotate_vcf_stream(
     evidence calculations stay in their respective callers.
     """
     with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        if strip_input_samples:
+            source_vcf.subset_samples([])
         header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=include_pon_info)
         case_selection = _resolve_case_sample(
             source_vcf.header,
@@ -585,6 +631,7 @@ def annotate_vcf(
         output_path=output_path,
         sample_name=sample_name,
         include_pon_info=False,
+        strip_input_samples=False,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
     )
@@ -635,41 +682,14 @@ def annotate_vcf_with_normals(
         case_selection: CaseSampleSelection,
         annotation: PonAnnotation,
     ) -> None:
-        pon_result = annotation
-        case_evidence = pon_result.case_evidence
-        normal_samples_included = truncated_normal_evidences(
-            list(pon_result.normal_evidences),
-            truncate=truncate,
-        )
-        normal_output_evidence = aggregate_evidence(normal_samples_included)
-        stats = compute_stats(
-            case_evidence,
-            normal_output_evidence,
-            per_sample_evidences=list(pon_result.normal_evidences),
+        _annotate_pon_record(
+            record,
+            annotation,
+            sample_name=case_selection.sample_name,
             truncate=truncate,
             pseudocount=pseudocount,
             prior_variant_probability=prior_variant_probability,
         )
-
-        _annotate_read_count_format_fields(
-            record,
-            case_evidence,
-            sample_name=case_selection.sample_name,
-        )
-        _annotate_pon_sample_format_fields(
-            record,
-            sample_name=case_selection.sample_name,
-            artifact_posterior=stats.artifact_posterior,
-            log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
-        )
-        record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
-        record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
-        record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
-        record.info["SKUA_PON_NON_ALT_FWD"] = normal_output_evidence.non_alt_forward
-        record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
-        record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
-        record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
-        record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
 
     def build_supported_annotations(
         case_selection: CaseSampleSelection,
@@ -689,6 +709,7 @@ def annotate_vcf_with_normals(
         output_path=output_path,
         sample_name=sample_name,
         include_pon_info=True,
+        strip_input_samples=False,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
     )
@@ -885,6 +906,198 @@ def annotate_variants_from_vcf(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+    )
+
+
+def _collect_pon_evidence(
+    normal_alignments: list[Any],
+    variants: Iterable[Variant],
+    *,
+    min_baseq: int,
+    min_mapq: int,
+) -> Iterator[tuple[Variant, tuple[AggregatedEvidence, ...]]]:
+    """Yield per-normal evidence for each target while sharing nearby fetches."""
+    for variant_batch in _variant_batches(variants):
+        normal_evidences_by_alignment = [
+            _collect_variant_batch(
+                normal_alignment,
+                variant_batch,
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+                allowed_read_group_ids=None,
+            )
+            for normal_alignment in normal_alignments
+        ]
+        for variant_index, variant in enumerate(variant_batch):
+            yield variant, tuple(
+                evidences[variant_index]
+                for evidences in normal_evidences_by_alignment
+            )
+
+
+def build_pon(
+    vcf_path: str | Path,
+    *,
+    normal_alignments: list[Any],
+    output_path: str | Path,
+    reference_path: str | Path | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+) -> None:
+    """Precompute per-normal evidence for every supported target into BCF."""
+    _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
+    if not normal_alignments:
+        raise ValueError("normal_alignments must include at least one normal alignment")
+    _validate_distinct_vcf_paths(vcf_path, output_path)
+
+    sample_names: list[str] = []
+    for index, normal_alignment in enumerate(normal_alignments, start=1):
+        try:
+            sample_names.append(_alignment_sample_name(normal_alignment))
+        except ValueError as exc:
+            raise ValueError(f"Normal alignment {index}: {exc}") from exc
+    if len(set(sample_names)) != len(sample_names):
+        raise ValueError("Normal alignment sample names must be unique")
+
+    _validate_vcf_against_inputs(
+        vcf_path,
+        alignment_files=[
+            (f"Normal alignment {index}", normal_alignment)
+            for index, normal_alignment in enumerate(normal_alignments, start=1)
+        ],
+        reference_path=reference_path,
+        strict=True,
+    )
+    try:
+        next(_supported_variants_from_vcf(vcf_path))
+    except StopIteration as exc:
+        raise ValueError("Target VCF must contain at least one supported variant") from exc
+    write_pon_artifact(
+        vcf_path,
+        output_path,
+        sample_names=tuple(sample_names),
+        evidence_records=_collect_pon_evidence(
+            normal_alignments,
+            _supported_variants_from_vcf(vcf_path),
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+        ),
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+    )
+
+
+def annotate_variants_from_pon(
+    alignment_file: Any,
+    pon_path: str | Path,
+    *,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    allowed_read_group_ids: frozenset[str] | None = None,
+) -> Iterator[tuple[Variant, PonAnnotation]]:
+    """Yield case evidence paired with cached per-normal evidence."""
+    metadata = read_pon_metadata(pon_path)
+    if metadata.min_baseq != min_baseq or metadata.min_mapq != min_mapq:
+        raise ValueError(
+            "Case evidence thresholds must match the PON artifact "
+            f"(min_baseq={metadata.min_baseq}, min_mapq={metadata.min_mapq})"
+        )
+
+    case_results = annotate_variants_from_vcf(
+        alignment_file,
+        pon_path,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
+    for (case_variant, case_evidence), (pon_variant, normal_evidences) in zip(
+        case_results,
+        read_pon_evidence(pon_path),
+        strict=True,
+    ):
+        if case_variant != pon_variant:
+            raise RuntimeError("Case and PON evidence variants are out of order")
+        yield case_variant, PonAnnotation(
+            case_evidence=case_evidence,
+            normal_evidences=normal_evidences,
+            normal_aggregate_evidence=aggregate_evidence(list(normal_evidences)),
+        )
+
+
+def annotate_vcf_with_pon(
+    alignment_file: Any,
+    pon_path: str | Path,
+    *,
+    output_path: str | Path,
+    sample_name: str | None = None,
+    reference_path: str | Path | None = None,
+    min_baseq: int = 20,
+    min_mapq: int = 20,
+    truncate: float = DEFAULT_TRUNCATE,
+    pseudocount: float = sys.float_info.epsilon,
+    prior_variant_probability: float = 0.5,
+) -> None:
+    """Annotate all targets in a precomputed PON while counting only the case."""
+    _validate_annotation_parameters(
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_variant_probability=prior_variant_probability,
+    )
+    metadata = read_pon_metadata(pon_path)
+    if metadata.min_baseq != min_baseq or metadata.min_mapq != min_mapq:
+        raise ValueError(
+            "Case evidence thresholds must match the PON artifact "
+            f"(min_baseq={metadata.min_baseq}, min_mapq={metadata.min_mapq})"
+        )
+    _validate_distinct_vcf_paths(pon_path, output_path)
+    _validate_vcf_against_inputs(
+        pon_path,
+        alignment_files=[("Case alignment", alignment_file)],
+        reference_path=reference_path,
+        strict=True,
+    )
+    # Validate every cached count before opening the output VCF. This preserves
+    # the all-or-nothing preflight behavior of live-normal annotation.
+    for _variant, _normal_evidences in read_pon_evidence(pon_path):
+        pass
+
+    def annotate_supported_record(
+        record: Any,
+        variant: Variant,
+        case_selection: CaseSampleSelection,
+        annotation: PonAnnotation,
+    ) -> None:
+        _annotate_pon_record(
+            record,
+            annotation,
+            sample_name=case_selection.sample_name,
+            truncate=truncate,
+            pseudocount=pseudocount,
+            prior_variant_probability=prior_variant_probability,
+        )
+
+    def build_supported_annotations(
+        case_selection: CaseSampleSelection,
+    ) -> Iterator[tuple[Variant, PonAnnotation]]:
+        return annotate_variants_from_pon(
+            alignment_file,
+            pon_path,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
+        )
+
+    _annotate_vcf_stream(
+        alignment_file,
+        pon_path,
+        output_path=output_path,
+        sample_name=sample_name,
+        include_pon_info=True,
+        strip_input_samples=True,
+        build_supported_annotations=build_supported_annotations,
+        annotate_supported_record=annotate_supported_record,
     )
 
 

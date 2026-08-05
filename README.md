@@ -30,6 +30,7 @@ Key input parameters:
 - `--vcf`: Input VCF file to annotate
 - `--alignment`: Case BAM or CRAM file
 - `--normal-list`: Text file with one normal BAM or CRAM path per line
+- `--pon`: Precomputed PON BCF; mutually exclusive with `--normal-list`
 - `--sample`: Case sample to annotate when VCF/BAM sample matching is ambiguous
 - `--reference`: Reference FASTA file, required when any input alignment is CRAM
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
@@ -73,6 +74,37 @@ Output INFO fields:
 - `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
 
 By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
+
+### Precomputed PONs
+
+For a fixed target set, normal evidence can be collected once and reused across
+case samples:
+
+```bash
+skua pon build \
+  --vcf hotspots.vcf.gz \
+  --normal-list normals.lst \
+  --output hotspots.pon.bcf
+
+skua annotate \
+  --pon hotspots.pon.bcf \
+  --alignment case.bam \
+  --output calls.vcf.gz
+```
+
+The PON BCF contains the target records and six strand-aware evidence counts
+for every normal sample. During annotation, skua reads those cached counts and
+only accesses the case alignment. Per-sample counts are retained so that
+`--truncate` and dispersion estimation are still evaluated at annotation time.
+Construction also writes a companion `.bcf.csi` index; target records must be
+coordinate-sorted.
+
+The PON records define the targets in cached mode, so `--vcf` is omitted from
+the second command. `--min-baseq` and `--min-mapq` used for the case must match
+the values stored when the PON was built. PON construction rejects unsupported
+or multiallelic target records and requires a unique read-group `SM` name in
+each normal alignment. A PON should be rebuilt when the reference assembly,
+alignment/evidence policy, or quality thresholds change.
 
 ## Python API
 

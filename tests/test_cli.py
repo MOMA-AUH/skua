@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import skua.cli as cli
 from skua import __version__
 
@@ -13,7 +15,7 @@ def test_main_version_prints_version_and_exits_successfully(capsys) -> None:
     assert capsys.readouterr().out == f"{__version__}\n"
 
 
-def test_main_annotate_requires_normal_list(capsys) -> None:
+def test_main_annotate_requires_normal_list_or_precomputed_pon(capsys) -> None:
     try:
         cli.main(
             [
@@ -27,9 +29,118 @@ def test_main_annotate_requires_normal_list(capsys) -> None:
     except SystemExit as exc:
         assert exc.code == 2
     else:
-        raise AssertionError("Expected SystemExit for missing --normal-list")
+        raise AssertionError("Expected SystemExit for missing PON source")
 
-    assert "the following arguments are required: --normal-list" in capsys.readouterr().err
+    assert "one of the arguments --normal-list --pon is required" in capsys.readouterr().err
+
+
+def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_path) -> None:
+    opened_paths: list[str] = []
+    calls: list[dict[str, object]] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            self.path = path
+            opened_paths.append(path)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_annotate(alignment_file, pon_path, **kwargs):
+        calls.append(
+            {
+                "case_path": alignment_file.path,
+                "pon_path": str(pon_path),
+                **kwargs,
+            }
+        )
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+    monkeypatch.setattr(cli, "annotate_vcf_with_pon", fake_annotate)
+
+    assert cli.main(
+        [
+            "annotate",
+            "--alignment",
+            "case.bam",
+            "--pon",
+            "hotspots.pon.bcf",
+            "--output",
+            "calls.vcf.gz",
+        ]
+    ) == 0
+
+    assert opened_paths == ["case.bam"]
+    assert calls == [
+        {
+            "case_path": "case.bam",
+            "pon_path": "hotspots.pon.bcf",
+            "output_path": "calls.vcf.gz",
+            "sample_name": None,
+            "reference_path": None,
+            "min_baseq": 20,
+            "min_mapq": 20,
+            "truncate": 0.1,
+            "prior_variant_probability": 0.5,
+        }
+    ]
+
+
+def test_main_pon_build_opens_normals_and_writes_bcf(monkeypatch, tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_build(vcf_path, **kwargs):
+        calls.append(
+            {
+                "vcf_path": str(vcf_path),
+                "normal_paths": [normal.path for normal in kwargs["normal_alignments"]],
+                **{key: value for key, value in kwargs.items() if key != "normal_alignments"},
+            }
+        )
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+    monkeypatch.setattr(cli, "build_pon", fake_build)
+    normal_list = tmp_path / "normals.lst"
+    normal_list.write_text("normal1.bam\nnormal2.bam\n", encoding="utf-8")
+
+    assert cli.main(
+        [
+            "pon",
+            "build",
+            "--vcf",
+            "hotspots.vcf.gz",
+            "--normal-list",
+            str(normal_list),
+            "--output",
+            "hotspots.pon.bcf",
+            "--min-baseq",
+            "25",
+        ]
+    ) == 0
+
+    assert calls == [
+        {
+            "vcf_path": "hotspots.vcf.gz",
+            "normal_paths": ["normal1.bam", "normal2.bam"],
+            "output_path": Path("hotspots.pon.bcf"),
+            "reference_path": None,
+            "min_baseq": 25,
+            "min_mapq": 20,
+        }
+    ]
 
 
 def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_path) -> None:
