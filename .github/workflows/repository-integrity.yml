@@ -32,6 +32,14 @@ jobs:
 
           if [[ "$BASE_SHA" =~ ^0+$ ]]; then
             BASE_SHA="$(git hash-object -t tree /dev/null)"
+          elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            # A force-push can make github.event.before unreachable before the
+            # runner checks out the new tip. Check the new tip's own change.
+            if PARENT_SHA="$(git rev-parse "${HEAD_SHA}^" 2>/dev/null)"; then
+              BASE_SHA="$PARENT_SHA"
+            else
+              BASE_SHA="$(git hash-object -t tree /dev/null)"
+            fi
           fi
 
           git diff --check "$BASE_SHA" "$HEAD_SHA"
