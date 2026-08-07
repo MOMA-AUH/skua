@@ -351,6 +351,33 @@ def test_build_pon_rejects_duplicate_normal_sample_names(tmp_path) -> None:
         )
 
 
+def test_build_pon_rejects_duplicate_target_alleles_before_writing(tmp_path) -> None:
+    target_path = tmp_path / "duplicate-targets.vcf"
+    output_path = tmp_path / "unused.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\tfirst\tA\tT\t.\tPASS\t.",
+                "chr1\t106\tsecond\tA\tT\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"duplicate target allele.*chr1:106 A>T"):
+        build_pon(
+            target_path,
+            normal_alignments=[_normal("N1", [])],
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
+
+
 def test_build_pon_rejects_unsupported_target_before_writing(tmp_path) -> None:
     target_path = tmp_path / "unsupported.vcf"
     output_path = tmp_path / "unused.bcf"

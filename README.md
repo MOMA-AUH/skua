@@ -121,9 +121,9 @@ consistently when the input VCF and PON are produced.
 Cached annotation always uses the `--min-baseq` and `--min-mapq` values stored
 in the PON; those options cannot be supplied together with `--pon`. PON
 construction rejects unsupported or multiallelic target records and requires a
-unique read-group `SM` name in each normal alignment. A PON should be rebuilt
-when the reference assembly, alignment/evidence policy, or quality thresholds
-change.
+unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
+read-group `SM` name in each normal alignment. A PON should be rebuilt when the
+reference assembly, alignment/evidence policy, or quality thresholds change.
 
 ## Python API
 

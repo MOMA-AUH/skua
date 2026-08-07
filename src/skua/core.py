@@ -784,6 +784,23 @@ def _supported_variants_from_vcf(vcf_path: str | Path) -> Iterator[Variant]:
                 yield assessment.variant
 
 
+def _validate_unique_pon_targets(vcf_path: str | Path) -> None:
+    """Require a PON target VCF to contain each supported allele once."""
+    seen_variants: set[Variant] = set()
+    has_supported_variant = False
+    for variant in _supported_variants_from_vcf(vcf_path):
+        has_supported_variant = True
+        if variant in seen_variants:
+            raise ValueError(
+                "PON target VCF contains duplicate target allele "
+                f"{variant.contig}:{variant.ref_pos0 + 1} {variant.ref}>{variant.alt}"
+            )
+        seen_variants.add(variant)
+
+    if not has_supported_variant:
+        raise ValueError("Target VCF must contain at least one supported variant")
+
+
 def _collect_variant_batch(
     alignment_file: Any,
     variant_batch: tuple[Variant, ...],
@@ -972,10 +989,7 @@ def build_pon(
         reference_path=reference_path,
         strict=True,
     )
-    try:
-        next(_supported_variants_from_vcf(vcf_path))
-    except StopIteration as exc:
-        raise ValueError("Target VCF must contain at least one supported variant") from exc
+    _validate_unique_pon_targets(vcf_path)
     write_pon_artifact(
         vcf_path,
         output_path,
