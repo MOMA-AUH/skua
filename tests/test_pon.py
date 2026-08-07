@@ -150,6 +150,112 @@ def test_annotate_vcf_with_pon_counts_only_case_and_preserves_targets(tmp_path) 
         assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is not None
 
 
+def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_evidence(
+    tmp_path,
+) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    pon_path = tmp_path / "hotspots.pon.bcf"
+    input_path = tmp_path / "case-candidates.vcf"
+    output_path = tmp_path / "calls.vcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\tpanel-1\tA\tT\t.\tPASS\t.",
+                "chr1\t109\tpanel-2\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    input_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=CALLER_SCORE,Number=1,Type=Integer,Description="Caller score">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t109\tcase-call\tA\tC\t42\tPASS\tCALLER_SCORE=7",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")])],
+        output_path=pon_path,
+    )
+    case = FakeAlignmentFile(
+        [_read("AAAAAAAACA", read_group="case-rg")],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+
+    annotate_vcf_with_pon(
+        case,
+        pon_path,
+        vcf_path=input_path,
+        output_path=output_path,
+    )
+
+    assert case.fetch_calls == [("chr1", 108, 109)]
+    with pysam.VariantFile(str(output_path)) as calls:
+        records = list(calls)
+        assert len(records) == 1
+        record = records[0]
+        assert record.id == "case-call"
+        assert record.qual == 42
+        assert record.info["CALLER_SCORE"] == 7
+        assert record.info["SKUA_PON_SAMPLE_COUNT"] == 1
+        assert record.info["SKUA_PON_NON_ALT_FWD"] == 1
+        assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
+
+
+def test_annotate_vcf_with_pon_rejects_input_variant_missing_from_pon_before_output(
+    tmp_path,
+) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    pon_path = tmp_path / "hotspots.pon.bcf"
+    input_path = tmp_path / "case-candidates.vcf"
+    output_path = tmp_path / "calls.vcf"
+    _write_targets(target_path)
+    input_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t107\tcase-call\tA\tG\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [])],
+        output_path=pon_path,
+    )
+    case = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+
+    with pytest.raises(ValueError, match=r"chr1:107 A>G.*not present in the PON"):
+        annotate_vcf_with_pon(
+            case,
+            pon_path,
+            vcf_path=input_path,
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
+
+
 def test_precomputed_pon_matches_live_normal_annotation(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"

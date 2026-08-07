@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     annotate_parser.add_argument(
         "--vcf",
-        help="Input target VCF path (required with --normal-list)",
+        help="Input target VCF path (required with --normal-list; optional with --pon)",
     )
     annotate_parser.add_argument(
         "--alignment",
@@ -188,14 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pon_source_group.add_argument(
         "--pon",
-        help="Precomputed PON BCF; its records define the target variants",
+        help="Precomputed PON BCF; its records define targets when --vcf is omitted",
     )
     _add_evidence_arguments(annotate_parser, default=None)
     _add_model_arguments(annotate_parser)
     annotate_parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail when a live input VCF record cannot be annotated",
+        help="Fail when an input VCF record cannot be annotated",
     )
 
     pon_parser = subparsers.add_parser(
@@ -241,8 +241,6 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     _validate_vcf_output(parser, args.output)
     if args.normal_list is not None and args.vcf is None:
         parser.error("--vcf is required with --normal-list")
-    if args.pon is not None and args.vcf is not None:
-        parser.error("--vcf cannot be used with --pon; the PON defines the targets")
 
     _require_reference_for_crams(
         parser,
@@ -264,9 +262,11 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                 annotate_vcf_with_pon(
                     alignment_file,
                     Path(args.pon),
+                    vcf_path=Path(args.vcf) if args.vcf is not None else None,
                     output_path=args.output if args.output is not None else "-",
                     sample_name=args.sample,
                     reference_path=args.reference,
+                    strict=args.strict,
                     **_pon_model_kwargs(args),
                 )
             else:

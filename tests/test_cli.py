@@ -78,9 +78,66 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
         {
             "case_path": "case.bam",
             "pon_path": "hotspots.pon.bcf",
+            "vcf_path": None,
             "output_path": "calls.vcf.gz",
             "sample_name": None,
             "reference_path": None,
+            "strict": False,
+            "truncate": 0.1,
+            "prior_variant_probability": 0.5,
+        }
+    ]
+
+
+def test_main_annotate_with_vcf_and_precomputed_pon_forwards_both_inputs(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    def fake_annotate(alignment_file, pon_path, **kwargs):
+        calls.append(
+            {
+                "case_path": alignment_file.path,
+                "pon_path": str(pon_path),
+                **kwargs,
+            }
+        )
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+    monkeypatch.setattr(cli, "annotate_vcf_with_pon", fake_annotate)
+
+    assert cli.main(
+        [
+            "annotate",
+            "--vcf",
+            "case-candidates.vcf.gz",
+            "--alignment",
+            "case.bam",
+            "--pon",
+            "hotspots.pon.bcf",
+            "--strict",
+        ]
+    ) == 0
+
+    assert calls == [
+        {
+            "case_path": "case.bam",
+            "pon_path": "hotspots.pon.bcf",
+            "vcf_path": Path("case-candidates.vcf.gz"),
+            "output_path": "-",
+            "sample_name": None,
+            "reference_path": None,
+            "strict": True,
             "truncate": 0.1,
             "prior_variant_probability": 0.5,
         }

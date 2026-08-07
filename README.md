@@ -27,7 +27,7 @@ skua annotate \
 ```
 
 Key input parameters:
-- `--vcf`: Input VCF file to annotate
+- `--vcf`: Input VCF file to annotate; required with `--normal-list` and optional with `--pon`
 - `--alignment`: Case BAM or CRAM file
 - `--normal-list`: Text file with one normal BAM or CRAM path per line
 - `--pon`: Precomputed PON BCF; mutually exclusive with `--normal-list`
@@ -92,6 +92,17 @@ skua annotate \
   --output calls.vcf.gz
 ```
 
+An input VCF can also define a subset of case-specific targets while the PON
+supplies their cached normal evidence:
+
+```bash
+skua annotate \
+  --vcf case-candidates.vcf.gz \
+  --pon hotspots.pon.bcf \
+  --alignment case.bam \
+  --output calls.vcf.gz
+```
+
 The PON BCF contains the target records and six strand-aware evidence counts
 for every normal sample. During annotation, skua reads those cached counts and
 only accesses the case alignment. Per-sample counts are retained so that
@@ -99,13 +110,20 @@ only accesses the case alignment. Per-sample counts are retained so that
 Construction also writes a companion `.bcf.csi` index; target records must be
 coordinate-sorted.
 
-The PON records define the targets in cached mode, so `--vcf` is omitted from
-the second command. Cached annotation always uses the `--min-baseq` and
-`--min-mapq` values stored in the PON; those options cannot be supplied together
-with `--pon`. PON construction rejects unsupported or multiallelic target
-records and requires a unique read-group `SM` name in each normal alignment. A
-PON should be rebuilt when the reference assembly, alignment/evidence policy,
-or quality thresholds change.
+When `--vcf` is omitted in cached mode, the PON records define the targets. When
+`--vcf` is supplied, its records define the output and their existing IDs,
+quality values, filters, INFO annotations, and samples are preserved. Every
+supported input allele must have an exact `CHROM`, `POS`, `REF`, and `ALT` match
+in the PON; extra PON targets are ignored, while a missing match fails before
+the output is created. Alleles should therefore be represented and normalized
+consistently when the input VCF and PON are produced.
+
+Cached annotation always uses the `--min-baseq` and `--min-mapq` values stored
+in the PON; those options cannot be supplied together with `--pon`. PON
+construction rejects unsupported or multiallelic target records and requires a
+unique read-group `SM` name in each normal alignment. A PON should be rebuilt
+when the reference assembly, alignment/evidence policy, or quality thresholds
+change.
 
 ## Python API
 

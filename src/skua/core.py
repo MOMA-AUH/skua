@@ -1021,18 +1021,80 @@ def annotate_variants_from_pon(
         )
 
 
+def _load_pon_evidence_for_variants(
+    pon_path: str | Path,
+    variants: Iterable[Variant],
+) -> dict[Variant, tuple[AggregatedEvidence, ...]]:
+    """Load cached evidence for requested alleles and reject incomplete joins."""
+    requested_variants = tuple(variants)
+    requested_set = frozenset(requested_variants)
+    evidence_by_variant: dict[Variant, tuple[AggregatedEvidence, ...]] = {}
+
+    for pon_variant, normal_evidences in read_pon_evidence(pon_path):
+        if pon_variant not in requested_set:
+            continue
+        if pon_variant in evidence_by_variant:
+            raise ValueError(
+                "PON artifact contains duplicate evidence for "
+                f"{pon_variant.contig}:{pon_variant.ref_pos0 + 1} "
+                f"{pon_variant.ref}>{pon_variant.alt}"
+            )
+        evidence_by_variant[pon_variant] = normal_evidences
+
+    for variant in requested_variants:
+        if variant not in evidence_by_variant:
+            raise ValueError(
+                f"Input VCF variant {variant.contig}:{variant.ref_pos0 + 1} "
+                f"{variant.ref}>{variant.alt} is not present in the PON artifact"
+            )
+
+    return evidence_by_variant
+
+
+def _annotate_variants_from_vcf_with_pon(
+    alignment_file: Any,
+    vcf_path: str | Path,
+    *,
+    pon_evidence_by_variant: dict[Variant, tuple[AggregatedEvidence, ...]],
+    min_baseq: int,
+    min_mapq: int,
+    allowed_read_group_ids: frozenset[str] | None,
+) -> Iterator[tuple[Variant, PonAnnotation]]:
+    """Pair case evidence from a VCF with preloaded evidence from a PON."""
+    for variant, case_evidence in annotate_variants_from_vcf(
+        alignment_file,
+        vcf_path,
+        min_baseq=min_baseq,
+        min_mapq=min_mapq,
+        allowed_read_group_ids=allowed_read_group_ids,
+    ):
+        normal_evidences = pon_evidence_by_variant[variant]
+        yield variant, PonAnnotation(
+            case_evidence=case_evidence,
+            normal_evidences=normal_evidences,
+            normal_aggregate_evidence=aggregate_evidence(list(normal_evidences)),
+        )
+
+
 def annotate_vcf_with_pon(
     alignment_file: Any,
     pon_path: str | Path,
     *,
+    vcf_path: str | Path | None = None,
     output_path: str | Path,
     sample_name: str | None = None,
     reference_path: str | Path | None = None,
+    strict: bool = False,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_variant_probability: float = 0.5,
 ) -> None:
-    """Annotate all targets in a precomputed PON while counting only the case."""
+    """Annotate VCF targets using cached PON evidence and fresh case evidence.
+
+    When ``vcf_path`` is omitted, the PON records continue to define the target
+    variants. When supplied, its records define the output and every supported
+    allele must have an exact contig/POS/REF/ALT match in the PON.
+    """
     _validate_annotation_parameters(
         min_baseq=None,
         min_mapq=None,
@@ -1040,18 +1102,28 @@ def annotate_vcf_with_pon(
         pseudocount=pseudocount,
         prior_variant_probability=prior_variant_probability,
     )
-    read_pon_metadata(pon_path)
-    _validate_distinct_vcf_paths(pon_path, output_path)
+    metadata = read_pon_metadata(pon_path)
+    source_vcf_path = pon_path if vcf_path is None else vcf_path
+    _validate_distinct_vcf_paths(source_vcf_path, output_path)
+    if vcf_path is not None:
+        _validate_distinct_vcf_paths(pon_path, output_path)
     _validate_vcf_against_inputs(
-        pon_path,
+        source_vcf_path,
         alignment_files=[("Case alignment", alignment_file)],
         reference_path=reference_path,
-        strict=True,
+        strict=True if vcf_path is None else strict,
     )
-    # Validate every cached count before opening the output VCF. This preserves
-    # the all-or-nothing preflight behavior of live-normal annotation.
-    for _variant, _normal_evidences in read_pon_evidence(pon_path):
-        pass
+    pon_evidence_by_variant: dict[Variant, tuple[AggregatedEvidence, ...]] | None = None
+    if vcf_path is None:
+        # Validate every cached count before opening the output VCF. This
+        # preserves the all-or-nothing behavior of cached annotation.
+        for _variant, _normal_evidences in read_pon_evidence(pon_path):
+            pass
+    else:
+        pon_evidence_by_variant = _load_pon_evidence_for_variants(
+            pon_path,
+            _supported_variants_from_vcf(vcf_path),
+        )
 
     def annotate_supported_record(
         record: Any,
@@ -1071,6 +1143,17 @@ def annotate_vcf_with_pon(
     def build_supported_annotations(
         case_selection: CaseSampleSelection,
     ) -> Iterator[tuple[Variant, PonAnnotation]]:
+        if vcf_path is not None:
+            if pon_evidence_by_variant is None:
+                raise RuntimeError("PON evidence lookup was not initialized")
+            return _annotate_variants_from_vcf_with_pon(
+                alignment_file,
+                vcf_path,
+                pon_evidence_by_variant=pon_evidence_by_variant,
+                min_baseq=metadata.min_baseq,
+                min_mapq=metadata.min_mapq,
+                allowed_read_group_ids=case_selection.allowed_read_group_ids,
+            )
         return annotate_variants_from_pon(
             alignment_file,
             pon_path,
@@ -1079,11 +1162,11 @@ def annotate_vcf_with_pon(
 
     _annotate_vcf_stream(
         alignment_file,
-        pon_path,
+        source_vcf_path,
         output_path=output_path,
         sample_name=sample_name,
         include_pon_info=True,
-        strip_input_samples=True,
+        strip_input_samples=vcf_path is None,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
     )
