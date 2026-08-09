@@ -70,6 +70,8 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
             "hotspots.pon.bcf",
             "--output",
             "calls.vcf.gz",
+            "--prior-artifact-probability",
+            "0.3",
         ]
     ) == 0
 
@@ -84,7 +86,7 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
             "reference_path": None,
             "strict": False,
             "truncate": 0.1,
-            "prior_variant_probability": 0.5,
+            "prior_artifact_probability": 0.3,
         }
     ]
 
@@ -139,7 +141,7 @@ def test_main_annotate_with_vcf_and_precomputed_pon_forwards_both_inputs(
             "reference_path": None,
             "strict": True,
             "truncate": 0.1,
-            "prior_variant_probability": 0.5,
+            "prior_artifact_probability": 0.5,
         }
     ]
 
@@ -284,7 +286,7 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,
-            "prior_variant_probability": 0.5,
+            "prior_artifact_probability": 0.5,
         }
     ]
     captured = capsys.readouterr()
@@ -366,7 +368,7 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
             "min_baseq": 15,
             "min_mapq": 12,
             "truncate": 0.1,
-            "prior_variant_probability": 0.5,
+            "prior_artifact_probability": 0.5,
         }
     ]
     captured = capsys.readouterr()
@@ -481,7 +483,7 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
             "min_baseq": 20,
             "min_mapq": 20,
             "truncate": 0.1,
-            "prior_variant_probability": 0.5,
+            "prior_artifact_probability": 0.5,
             "reference_path": "ref.fa",
             "normal_count": 1,
         }

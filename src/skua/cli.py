@@ -71,10 +71,10 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         help="Optional pseudocount for beta-binomial rate estimates",
     )
     parser.add_argument(
-        "--prior-variant-probability",
+        "--prior-artifact-probability",
         type=float,
         default=0.5,
-        help="Prior probability for the variant model",
+        help="Fallback artifact prior when SKUA_ARTIFACT_PRIOR is missing",
     )
 
 
@@ -91,8 +91,8 @@ def _validate_parameters(
             min_mapq=args.min_mapq,
             truncate=args.truncate if include_model else None,
             pseudocount=args.pseudocount if include_model else None,
-            prior_variant_probability=(
-                args.prior_variant_probability if include_model else None
+            prior_artifact_probability=(
+                args.prior_artifact_probability if include_model else None
             ),
         )
     except ValueError as exc:
@@ -129,7 +129,7 @@ def _alignment_kwargs(reference: str | None) -> dict[str, str]:
 def _pon_model_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "truncate": args.truncate,
-        "prior_variant_probability": args.prior_variant_probability,
+        "prior_artifact_probability": args.prior_artifact_probability,
     }
     if args.pseudocount is not None:
         kwargs["pseudocount"] = args.pseudocount

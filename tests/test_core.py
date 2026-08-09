@@ -901,7 +901,7 @@ def test_annotate_vcf_rejects_multi_sample_normal_alignment(tmp_path) -> None:
         ({"min_mapq": -1}, "min_mapq"),
         ({"truncate": 0}, "truncate"),
         ({"pseudocount": 0}, "pseudocount"),
-        ({"prior_variant_probability": 1}, "prior_variant_probability"),
+        ({"prior_artifact_probability": 1}, "prior_artifact_probability"),
     ],
 )
 def test_annotate_vcf_with_normals_rejects_invalid_parameters(tmp_path, kwargs, message) -> None:
@@ -1182,6 +1182,159 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         assert record.info["SKUA_PON_USABLE"] == 1
         assert record.info["SKUA_PON_UNUSABLE"] == 1
         assert record.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
+
+
+def test_annotate_vcf_with_normals_uses_and_writes_effective_artifact_priors(
+    tmp_path,
+) -> None:
+    import pysam
+
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\texplicit\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=0.2\tGT\t0/1",
+                "chr1\t107\tabsent\tA\tC\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t108\tmissing\tA\tG\t.\tPASS\tSKUA_ARTIFACT_PRIOR=.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    compressed_vcf_path = tmp_path / "input.vcf.gz"
+    pysam.tabix_compress(str(vcf_path), str(compressed_vcf_path), force=True)
+    output_path = tmp_path / "annotated.vcf"
+
+    annotate_vcf_with_normals(
+        alignment_file,
+        compressed_vcf_path,
+        normal_alignments=[],
+        output_path=output_path,
+        prior_artifact_probability=0.25,
+    )
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        prior_header = annotated_vcf.header.info["SKUA_ARTIFACT_PRIOR"]
+        assert prior_header.number == "A"
+        assert prior_header.type == "Float"
+        records = list(annotated_vcf)
+
+    assert [record.info["SKUA_ARTIFACT_PRIOR"][0] for record in records] == pytest.approx(
+        [0.2, 0.25, 0.25]
+    )
+    assert [
+        record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] for record in records
+    ] == pytest.approx([0.0, 0.0, 0.0])
+    assert [
+        record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
+    ] == pytest.approx([0.2, 0.25, 0.25])
+
+
+@pytest.mark.parametrize(
+    ("raw_prior", "message"),
+    [
+        ("abc", "malformed"),
+        ("", "malformed"),
+        ("0.2,0.3", "exactly one value"),
+        ("nan", "finite and between 0 and 1"),
+        ("inf", "finite and between 0 and 1"),
+        ("-inf", "finite and between 0 and 1"),
+        ("0", "finite and between 0 and 1"),
+        ("1", "finite and between 0 and 1"),
+        ("-0.1", "finite and between 0 and 1"),
+        ("1.1", "finite and between 0 and 1"),
+    ],
+)
+def test_annotate_vcf_with_normals_rejects_invalid_artifact_prior_before_output(
+    tmp_path,
+    raw_prior,
+    message,
+) -> None:
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                f"chr1\t106\t.\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR={raw_prior}\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    with pytest.raises(
+        ValueError,
+        match=rf"SKUA_ARTIFACT_PRIOR.*chr1:106.*{message}",
+    ):
+        annotate_vcf_with_normals(
+            alignment_file,
+            vcf_path,
+            normal_alignments=[],
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=1,Type=Float,Description="Wrong number">',
+        '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=String,Description="Wrong type">',
+    ],
+)
+def test_annotate_vcf_with_normals_rejects_incompatible_artifact_prior_header(
+    tmp_path,
+    definition,
+) -> None:
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                definition,
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=0.2\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+
+    with pytest.raises(ValueError, match="incompatible SKUA_ARTIFACT_PRIOR"):
+        annotate_vcf_with_normals(
+            alignment_file,
+            vcf_path,
+            normal_alignments=[],
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
 
 
 def test_annotate_vcf_with_normals_batches_dense_records_per_alignment(tmp_path) -> None:

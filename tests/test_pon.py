@@ -116,6 +116,14 @@ def test_build_pon_indexes_bcf_so_opening_it_does_not_log_an_index_error(
     assert "Could not retrieve index file" not in capfd.readouterr().err
 
 
+def test_read_pon_metadata_rejects_vcf_artifacts(tmp_path) -> None:
+    vcf_path = tmp_path / "not-a-pon.vcf"
+    _write_targets(vcf_path)
+
+    with pytest.raises(ValueError, match="PON artifact must be BCF"):
+        read_pon_metadata(vcf_path)
+
+
 def test_annotate_vcf_with_pon_counts_only_case_and_preserves_targets(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"
@@ -148,6 +156,46 @@ def test_annotate_vcf_with_pon_counts_only_case_and_preserves_targets(tmp_path) 
         assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
         assert record.samples["CASE"]["SKUA_USABLE"] == 1
         assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is not None
+
+
+def test_pon_preserves_and_uses_target_artifact_prior(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    pon_path = tmp_path / "hotspots.pon.bcf"
+    output_path = tmp_path / "calls.vcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\ths1\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=0.8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [])],
+        output_path=pon_path,
+    )
+
+    with pysam.VariantFile(str(pon_path)) as artifact:
+        pon_record = next(iter(artifact))
+        assert pon_record.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.8)
+
+    case = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+    annotate_vcf_with_pon(case, pon_path, output_path=output_path)
+
+    with pysam.VariantFile(str(output_path)) as calls:
+        record = next(iter(calls))
+        assert record.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.8)
+        assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(0.8)
 
 
 def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_evidence(
@@ -212,6 +260,67 @@ def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_eviden
         assert record.info["SKUA_PON_SAMPLE_COUNT"] == 1
         assert record.info["SKUA_PON_NON_ALT_FWD"] == 1
         assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
+
+
+def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    pon_path = tmp_path / "hotspots.pon.bcf"
+    input_path = tmp_path / "case-candidates.vcf"
+    output_path = tmp_path / "calls.vcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\tpanel\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=0.8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    input_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\texplicit\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=0.2",
+                "chr1\t106\tmissing\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [])],
+        output_path=pon_path,
+    )
+    case = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+
+    annotate_vcf_with_pon(
+        case,
+        pon_path,
+        vcf_path=input_path,
+        output_path=output_path,
+        prior_artifact_probability=0.4,
+    )
+
+    with pysam.VariantFile(str(output_path)) as calls:
+        records = list(calls)
+    assert [record.info["SKUA_ARTIFACT_PRIOR"][0] for record in records] == pytest.approx(
+        [0.2, 0.4]
+    )
+    assert [
+        record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
+    ] == pytest.approx([0.2, 0.4])
 
 
 def test_annotate_vcf_with_pon_rejects_input_variant_missing_from_pon_before_output(
@@ -376,6 +485,34 @@ def test_build_pon_rejects_duplicate_target_alleles_before_writing(tmp_path) -> 
         )
 
     assert not output_path.exists()
+
+
+def test_build_pon_rejects_invalid_artifact_prior_before_writing(tmp_path) -> None:
+    target_path = tmp_path / "invalid-prior.vcf"
+    output_path = tmp_path / "unused.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\t.\tA\tT\t.\tPASS\tSKUA_ARTIFACT_PRIOR=abc",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"SKUA_ARTIFACT_PRIOR.*malformed"):
+        build_pon(
+            target_path,
+            normal_alignments=[_normal("N1", [])],
+            output_path=output_path,
+        )
+
+    assert not output_path.exists()
+    assert not (tmp_path / "unused.bcf.csi").exists()
 
 
 def test_build_pon_rejects_unsupported_target_before_writing(tmp_path) -> None:

@@ -42,8 +42,26 @@ Other optional parameters:
 - `--min-mapq` (default `20`): Minimum mapping quality for reads
 - `--truncate` (default `0.1`): Truncation percentile for PON sample inclusion
 - `--pseudocount` (default `sys.float_info.epsilon`): Pseudocount for beta-binomial rate estimates
-- `--prior-variant-probability` (default `0.5`): Prior probability for variant model
+- `--prior-artifact-probability` (default `0.5`): Fallback artifact prior when the input record has no `SKUA_ARTIFACT_PRIOR`
 - `--strict`: Fail before writing output if any VCF record cannot be annotated
+
+Supported biallelic records may provide an allele-specific artifact prior in
+INFO:
+
+```vcf
+##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior probability that the ALT allele is an artifact before Skua evidence">
+```
+
+The value must be finite and strictly between `0` and `1`. An absent field or
+`.` uses `--prior-artifact-probability`; an explicit record value takes
+precedence. Skua writes the effective value to every annotated output record so
+the artifact posterior can be reproduced. The artifact prior affects
+`SKUA_ARTIFACT_POSTERIOR` but does not affect `SKUA_LOG_BAYES_FACTOR`.
+
+Artifact priors must be calibrated and independent of the case-read and PON
+evidence evaluated by Skua. Deriving a prior from the same evidence would count
+that evidence twice. INFO is appropriate for an allele- or site-specific prior
+shared by samples; a case- or sample-specific prior belongs in FORMAT instead.
 
 Alignment records must be mapped primary records from a proper pair. Records
 whose mate is unmapped, or which are marked secondary, supplementary, failed
@@ -67,6 +85,7 @@ Output FORMAT fields:
 - `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models
 
 Output INFO fields:
+- `SKUA_ARTIFACT_PRIOR`: Effective prior probability that the ALT allele is an artifact before Skua evidence
 - `SKUA_STATUS`: Annotation outcome for every record. `ANNOTATED` records receive Skua evidence; unsupported records are retained with an `UNSUPPORTED_*` status and are not assigned new Skua evidence fields. `UNSUPPORTED_RECORD` includes records with no alternate allele (`ALT=.`).
 - `SKUA_PON_SAMPLE_COUNT`: Number of normal samples included after truncation
 - `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`: Aggregated read counts across normals
@@ -103,7 +122,7 @@ skua annotate \
   --output calls.vcf.gz
 ```
 
-The PON BCF contains the target records and six strand-aware evidence counts
+The indexed PON BCF contains the target records and six strand-aware evidence counts
 for every normal sample. During annotation, skua reads those cached counts and
 only accesses the case alignment. Per-sample counts are retained so that
 `--truncate` and dispersion estimation are still evaluated at annotation time.
@@ -117,6 +136,16 @@ supported input allele must have an exact `CHROM`, `POS`, `REF`, and `ALT` match
 in the PON; extra PON targets are ignored, while a missing match fails before
 the output is created. Alleles should therefore be represented and normalized
 consistently when the input VCF and PON are produced.
+
+The record-defining source also owns the artifact prior. In PON-only mode, a
+`SKUA_ARTIFACT_PRIOR` retained from the target VCF takes precedence over the CLI
+fallback. With `--vcf --pon`, the separate input VCF takes precedence: its
+explicit value is used, while an absent or missing value uses the CLI fallback
+rather than a prior stored in the reusable PON. Store target-intrinsic priors in
+the target VCF before PON construction. A prior prepared specifically for one
+case run should live in that run's separate `--vcf`, not in a reusable PON. If
+samples within one VCF require different priors, those values belong in FORMAT
+rather than this sample-shared INFO field.
 
 Cached annotation always uses the `--min-baseq` and `--min-mapq` values stored
 in the PON; those options cannot be supplied together with `--pon`. PON

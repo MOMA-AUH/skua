@@ -195,7 +195,7 @@ def compute_stats(
     per_sample_evidences: list[AggregatedEvidence] | None = None,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
+    prior_artifact_probability: float = 0.5,
     mu_min: float = 1e-6,
     mu_max: float = 1 - 1e-6,
 ) -> Stats:
@@ -304,16 +304,19 @@ def compute_stats(
             - _logbb(X_bw, N_bw, nu_bw_scaled, disp)
         )
 
-    prior_variant_probability = _bound(prior_variant_probability, 1e-12, 1 - 1e-12)
-    odds_variant = prior_variant_probability / (1.0 - prior_variant_probability)
-    log_odds_variant = math.log(odds_variant)
-    delta = log_odds_variant - log_bayes_factor
-    if delta >= 0:
-        exp_neg_delta = math.exp(-delta)
-        artifact_posterior = exp_neg_delta / (1.0 + exp_neg_delta)
+    prior_artifact_probability = _bound(
+        prior_artifact_probability,
+        1e-12,
+        1 - 1e-12,
+    )
+    odds_artifact = prior_artifact_probability / (1.0 - prior_artifact_probability)
+    log_posterior_odds_artifact = log_bayes_factor + math.log(odds_artifact)
+    if log_posterior_odds_artifact >= 0:
+        exp_neg_delta = math.exp(-log_posterior_odds_artifact)
+        artifact_posterior = 1.0 / (1.0 + exp_neg_delta)
     else:
-        exp_delta = math.exp(delta)
-        artifact_posterior = 1.0 / (1.0 + exp_delta)
+        exp_delta = math.exp(log_posterior_odds_artifact)
+        artifact_posterior = exp_delta / (1.0 + exp_delta)
 
     return Stats(
         case_counts=case_counts,

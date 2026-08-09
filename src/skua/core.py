@@ -1,8 +1,10 @@
 """Core public API for skua."""
 
+import gzip
 import json
 from dataclasses import dataclass
 from enum import Enum
+import math
 from pathlib import Path
 import sys
 from typing import Any
@@ -50,6 +52,13 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_PON_USABLE", "Integer", "PON usable reads after truncation"),
     ("SKUA_PON_UNUSABLE", "Integer", "PON unusable reads after truncation"),
     ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
+)
+
+ARTIFACT_PRIOR_INFO_FIELD_DEFINITION = (
+    "SKUA_ARTIFACT_PRIOR",
+    "A",
+    "Float",
+    "Prior probability that the ALT allele is an artifact before Skua evidence",
 )
 
 ANNOTATION_STATUS_INFO_FIELD_DEFINITION = (
@@ -248,7 +257,7 @@ def _validate_annotation_parameters(
     min_mapq: int | None,
     truncate: float | None = None,
     pseudocount: float | None = None,
-    prior_variant_probability: float | None = None,
+    prior_artifact_probability: float | None = None,
 ) -> None:
     """Reject parameter values whose semantics are undefined for annotation."""
     if min_baseq is not None and min_baseq < 0:
@@ -259,8 +268,11 @@ def _validate_annotation_parameters(
         raise ValueError("truncate must be greater than 0 and no greater than 1")
     if pseudocount is not None and pseudocount <= 0:
         raise ValueError("pseudocount must be > 0")
-    if prior_variant_probability is not None and not 0.0 < prior_variant_probability < 1.0:
-        raise ValueError("prior_variant_probability must be between 0 and 1")
+    if prior_artifact_probability is not None and (
+        not math.isfinite(prior_artifact_probability)
+        or not 0.0 < prior_artifact_probability < 1.0
+    ):
+        raise ValueError("prior_artifact_probability must be finite and between 0 and 1")
 
 
 def _validate_alignment_indexes(alignment_files: list[tuple[str, Any]]) -> None:
@@ -330,6 +342,26 @@ def _validate_vcf_against_inputs(
             fasta_file.close()
 
 
+def _validate_artifact_prior_header(header: Any, *, add_if_missing: bool) -> bool:
+    """Validate the artifact-prior INFO definition and optionally add it."""
+    field_id, number, field_type, description = ARTIFACT_PRIOR_INFO_FIELD_DEFINITION
+    if field_id not in header.info:
+        if add_if_missing:
+            header.add_line(
+                f'##INFO=<ID={field_id},Number={number},Type={field_type},'
+                f'Description="{description}">'
+            )
+        return False
+
+    field = header.info[field_id]
+    if field.number != number or field.type != field_type:
+        raise ValueError(
+            f"Input VCF contains an incompatible {field_id} INFO definition; "
+            f"expected Number={number},Type={field_type}"
+        )
+    return True
+
+
 def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> Any:
     """Ensure SKUA FORMAT/INFO definitions exist on the active VCF header."""
     annotated_header = header
@@ -348,6 +380,8 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
         )
 
     if include_pon_info:
+        _validate_artifact_prior_header(annotated_header, add_if_missing=True)
+
         for field_id, field_type, description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS:
             if field_id not in annotated_header.formats:
                 annotated_header.add_line(
@@ -361,6 +395,99 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
                 )
 
     return annotated_header
+
+
+def _effective_artifact_priors_from_vcf(
+    vcf_path: str | Path,
+    *,
+    fallback_artifact_probability: float,
+) -> tuple[float, ...]:
+    """Validate and resolve one effective artifact prior per supported record."""
+    effective_priors: list[float] = []
+    field_id = ARTIFACT_PRIOR_INFO_FIELD_DEFINITION[0]
+    with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        raw_values = (
+            _raw_artifact_prior_values(vcf_path)
+            if source_vcf.format == "VCF"
+            else None
+        )
+        has_prior_definition = _validate_artifact_prior_header(
+            source_vcf.header,
+            add_if_missing=False,
+        )
+
+        record_count = 0
+        for record_count, record in enumerate(source_vcf, start=1):
+            if _assess_vcf_record(record).variant is None:
+                continue
+            raw_matches = () if raw_values is None else raw_values[record_count - 1]
+            if len(raw_matches) > 1:
+                raise ValueError(
+                    f"{field_id} at {record.contig}:{record.pos} must occur at most once"
+                )
+            raw_value_text = raw_matches[0] if raw_matches else None
+            if raw_value_text is not None and not has_prior_definition:
+                raise ValueError(
+                    f"{field_id} at {record.contig}:{record.pos} requires a "
+                    "Number=A,Type=Float INFO definition"
+                )
+            if raw_value_text not in (None, "."):
+                raw_parts = raw_value_text.split(",")
+                if len(raw_parts) != 1:
+                    raise ValueError(
+                        f"{field_id} at {record.contig}:{record.pos} must contain exactly one value"
+                    )
+                try:
+                    float(raw_parts[0])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{field_id} at {record.contig}:{record.pos} is malformed"
+                    ) from exc
+            raw_value = record.info.get(field_id) if has_prior_definition else None
+            if raw_value is None:
+                effective_priors.append(fallback_artifact_probability)
+                continue
+            values = raw_value if isinstance(raw_value, tuple) else (raw_value,)
+            if len(values) != 1:
+                raise ValueError(
+                    f"{field_id} at {record.contig}:{record.pos} must contain exactly one value"
+                )
+            value = values[0]
+            if value is None:
+                effective_priors.append(fallback_artifact_probability)
+                continue
+            artifact_probability = float(value)
+            if not math.isfinite(artifact_probability) or not 0.0 < artifact_probability < 1.0:
+                raise ValueError(
+                    f"{field_id} at {record.contig}:{record.pos} must be finite and between 0 and 1"
+                )
+            effective_priors.append(artifact_probability)
+        if raw_values is not None and record_count != len(raw_values):
+            raise ValueError("VCF text and parsed record counts do not match")
+    return tuple(effective_priors)
+
+
+def _raw_artifact_prior_values(vcf_path: str | Path) -> tuple[tuple[str, ...], ...]:
+    """Read raw textual INFO values so malformed floats remain distinguishable from '.'."""
+    path = Path(vcf_path)
+    with path.open("rb") as binary_source:
+        is_compressed = binary_source.read(2) == b"\x1f\x8b"
+    opener = gzip.open if is_compressed else open
+    values: list[tuple[str, ...]] = []
+    with opener(path, "rt", encoding="utf-8") as source:
+        for line in source:
+            if not line or line.startswith("#"):
+                continue
+            columns = line.rstrip("\r\n").split("\t")
+            if len(columns) < 8:
+                continue
+            matches: list[str] = []
+            for item in columns[7].split(";"):
+                key, separator, value = item.partition("=")
+                if key == "SKUA_ARTIFACT_PRIOR":
+                    matches.append(value if separator else "")
+            values.append(tuple(matches))
+    return tuple(values)
 
 
 def _assess_vcf_record(record: Any) -> VcfRecordAnnotation:
@@ -446,7 +573,7 @@ def _annotate_pon_record(
     sample_name: str,
     truncate: float,
     pseudocount: float,
-    prior_variant_probability: float,
+    prior_artifact_probability: float,
 ) -> None:
     """Annotate one case record from live or precomputed normal evidence."""
     case_evidence = annotation.case_evidence
@@ -461,7 +588,7 @@ def _annotate_pon_record(
         per_sample_evidences=list(annotation.normal_evidences),
         truncate=truncate,
         pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
+        prior_artifact_probability=prior_artifact_probability,
     )
 
     _annotate_read_count_format_fields(record, case_evidence, sample_name=sample_name)
@@ -479,6 +606,7 @@ def _annotate_pon_record(
     record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
     record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
     record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
+    record.info["SKUA_ARTIFACT_PRIOR"] = float(prior_artifact_probability)
 
 
 def _vcf_write_mode(output_path: str | Path) -> str:
@@ -654,7 +782,7 @@ def annotate_vcf_with_normals(
     min_mapq: int = 20,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
+    prior_artifact_probability: float = 0.5,
 ) -> None:
     """Annotate an input VCF with read-count FORMAT and PON INFO fields."""
     if normal_alignments is None:
@@ -665,7 +793,7 @@ def annotate_vcf_with_normals(
         min_mapq=min_mapq,
         truncate=truncate,
         pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
+        prior_artifact_probability=prior_artifact_probability,
     )
     _validate_distinct_vcf_paths(vcf_path, output_path)
     _validate_normal_alignment_samples(normal_alignments)
@@ -678,6 +806,12 @@ def annotate_vcf_with_normals(
         ],
         reference_path=reference_path,
         strict=strict,
+    )
+    effective_artifact_priors = iter(
+        _effective_artifact_priors_from_vcf(
+            vcf_path,
+            fallback_artifact_probability=prior_artifact_probability,
+        )
     )
 
     def annotate_supported_record(
@@ -692,7 +826,7 @@ def annotate_vcf_with_normals(
             sample_name=case_selection.sample_name,
             truncate=truncate,
             pseudocount=pseudocount,
-            prior_variant_probability=prior_variant_probability,
+            prior_artifact_probability=next(effective_artifact_priors),
         )
 
     def build_supported_annotations(
@@ -989,6 +1123,10 @@ def build_pon(
         reference_path=reference_path,
         strict=True,
     )
+    _effective_artifact_priors_from_vcf(
+        vcf_path,
+        fallback_artifact_probability=0.5,
+    )
     _validate_unique_pon_targets(vcf_path)
     write_pon_artifact(
         vcf_path,
@@ -1101,7 +1239,7 @@ def annotate_vcf_with_pon(
     strict: bool = False,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
+    prior_artifact_probability: float = 0.5,
 ) -> None:
     """Annotate VCF targets using cached PON evidence and fresh case evidence.
 
@@ -1114,7 +1252,7 @@ def annotate_vcf_with_pon(
         min_mapq=None,
         truncate=truncate,
         pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
+        prior_artifact_probability=prior_artifact_probability,
     )
     metadata = read_pon_metadata(pon_path)
     source_vcf_path = pon_path if vcf_path is None else vcf_path
@@ -1138,6 +1276,12 @@ def annotate_vcf_with_pon(
             pon_path,
             _supported_variants_from_vcf(vcf_path),
         )
+    effective_artifact_priors = iter(
+        _effective_artifact_priors_from_vcf(
+            source_vcf_path,
+            fallback_artifact_probability=prior_artifact_probability,
+        )
+    )
 
     def annotate_supported_record(
         record: Any,
@@ -1151,7 +1295,7 @@ def annotate_vcf_with_pon(
             sample_name=case_selection.sample_name,
             truncate=truncate,
             pseudocount=pseudocount,
-            prior_variant_probability=prior_variant_probability,
+            prior_artifact_probability=next(effective_artifact_priors),
         )
 
     def build_supported_annotations(
@@ -1358,7 +1502,7 @@ def format_annotation_results_with_normals(
     *,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
+    prior_artifact_probability: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Convert PON annotation results to JSON/tabular-ready row dictionaries."""
     rows: list[dict[str, Any]] = []
@@ -1378,7 +1522,7 @@ def format_annotation_results_with_normals(
             per_sample_evidences=per_sample_evidences,
             truncate=truncate,
             pseudocount=pseudocount,
-            prior_variant_probability=prior_variant_probability,
+            prior_artifact_probability=prior_artifact_probability,
         )
         normal_samples_used = len(normal_samples_included)
         rows.append(
@@ -1433,7 +1577,7 @@ def _build_annotation_rows_with_normals(
     min_mapq: int,
     truncate: float,
     pseudocount: float,
-    prior_variant_probability: float,
+    prior_artifact_probability: float,
 ) -> list[dict[str, Any]]:
     """Build formatted PON annotation rows from case + normal alignments and one VCF."""
     return format_annotation_results_with_normals(
@@ -1446,7 +1590,7 @@ def _build_annotation_rows_with_normals(
         ),
         truncate=truncate,
         pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
+        prior_artifact_probability=prior_artifact_probability,
     )
 
 
@@ -1460,7 +1604,7 @@ def annotate_vcf_to_json_with_normals(
     min_mapq: int = 20,
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
-    prior_variant_probability: float = 0.5,
+    prior_artifact_probability: float = 0.5,
 ) -> str:
     """Run PON variant annotation from VCF and return JSON output, optionally writing to file."""
     if normal_alignments is None:
@@ -1474,7 +1618,7 @@ def annotate_vcf_to_json_with_normals(
         min_mapq=min_mapq,
         truncate=truncate,
         pseudocount=pseudocount,
-        prior_variant_probability=prior_variant_probability,
+        prior_artifact_probability=prior_artifact_probability,
     )
     return _render_and_optionally_write(
         rows,

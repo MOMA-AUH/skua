@@ -124,6 +124,8 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
 def read_pon_metadata(path: str | Path) -> PonArtifactMetadata:
     """Read and validate PON artifact metadata without loading its evidence."""
     with pysam.VariantFile(str(path)) as pon_file:
+        if pon_file.format != "BCF":
+            raise ValueError("PON artifact must be BCF")
         return _parse_metadata(pon_file.header)
 
 
@@ -277,6 +279,8 @@ def read_pon_evidence(
 ) -> Iterator[tuple[Variant, tuple[AggregatedEvidence, ...]]]:
     """Yield target variants and their per-normal evidence in artifact order."""
     with pysam.VariantFile(str(path)) as pon_file:
+        if pon_file.format != "BCF":
+            raise ValueError("PON artifact must be BCF")
         metadata = _parse_metadata(pon_file.header)
         for record in pon_file:
             alts = record.alts or ()

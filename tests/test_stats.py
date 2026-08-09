@@ -104,6 +104,27 @@ def test_compute_stats_null_posterior_decreases_with_stronger_signal() -> None:
     assert stronger_stats.artifact_posterior < weaker_stats.artifact_posterior
 
 
+def test_compute_stats_artifact_prior_changes_only_the_posterior() -> None:
+    case_evidence = _make_normal(4, 0, 10)
+    normal_evidence = _make_normal(1, 0, 100)
+
+    low_prior = compute_stats(
+        case_evidence,
+        normal_evidence,
+        prior_artifact_probability=0.2,
+    )
+    high_prior = compute_stats(
+        case_evidence,
+        normal_evidence,
+        prior_artifact_probability=0.8,
+    )
+
+    assert low_prior.log_bayes_factor_artifact_vs_variant == (
+        high_prior.log_bayes_factor_artifact_vs_variant
+    )
+    assert low_prior.artifact_posterior < high_prior.artifact_posterior
+
+
 def _make_normal(alt_fw: int, alt_bw: int, depth: int) -> AggregatedEvidence:
     non = depth - alt_fw - alt_bw
     return AggregatedEvidence(
