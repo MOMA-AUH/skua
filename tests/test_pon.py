@@ -1,5 +1,6 @@
 import pysam
 import pytest
+from pysam import bcftools
 
 from skua import (
     annotate_vcf_with_normals,
@@ -53,6 +54,52 @@ def _normal(sample_name: str, reads: list[FakeRead]) -> FakeAlignmentFile:
     )
 
 
+def _write_policy_one_pon(path) -> None:
+    """Write a structurally valid PON produced under evidence policy 1."""
+    header = pysam.VariantHeader()
+    header.contigs.add("chr1", length=1000)
+    header.add_meta(
+        "SKUA_PON",
+        items=[
+            ("SchemaVersion", "1"),
+            ("EvidencePolicyVersion", "1"),
+            ("MinBaseQ", "20"),
+            ("MinMapQ", "20"),
+            ("SkuaVersion", "0.6.0"),
+        ],
+    )
+    for field_id in (
+        "SKUA_PON_AF",
+        "SKUA_PON_AR",
+        "SKUA_PON_NF",
+        "SKUA_PON_NR",
+        "SKUA_PON_U",
+        "SKUA_PON_X",
+    ):
+        header.add_line(
+            f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="Legacy evidence">'
+        )
+    header.add_sample("N1")
+
+    with pysam.VariantFile(str(path), "wb", header=header) as pon_file:
+        record = pon_file.new_record(
+            contig="chr1",
+            start=105,
+            stop=106,
+            alleles=("A", "T"),
+        )
+        sample = record.samples["N1"]
+        sample["SKUA_PON_AF"] = 0
+        sample["SKUA_PON_AR"] = 0
+        sample["SKUA_PON_NF"] = 1
+        sample["SKUA_PON_NR"] = 0
+        sample["SKUA_PON_U"] = 1
+        sample["SKUA_PON_X"] = 0
+        pon_file.write(record)
+
+    bcftools.index("--force", str(path))
+
+
 def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     output_path = tmp_path / "hotspots.pon.bcf"
@@ -72,7 +119,7 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
 
     metadata = read_pon_metadata(output_path)
     assert metadata.schema_version == 1
-    assert metadata.evidence_policy_version == 1
+    assert metadata.evidence_policy_version == 2
     assert metadata.min_baseq == 25
     assert metadata.min_mapq == 30
     assert metadata.sample_names == ("N1", "N2")
@@ -136,10 +183,60 @@ def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) 
     assert inspection.index_present is True
     assert inspection.metadata_record_count == 1
     assert inspection.schema_version == "1"
-    assert inspection.evidence_policy_version == "1"
+    assert inspection.evidence_policy_version == "2"
     assert inspection.min_baseq == "25"
     assert inspection.min_mapq == "30"
     assert inspection.sample_names == ("N1",)
+
+
+def test_policy_one_pon_can_be_inspected_but_not_read(tmp_path) -> None:
+    pon_path = tmp_path / "legacy.pon.bcf"
+    _write_policy_one_pon(pon_path)
+
+    inspection = inspect_pon(pon_path)
+
+    assert inspection.evidence_policy_version == "1"
+    with pytest.raises(
+        ValueError,
+        match="Unsupported PON evidence policy version 1; expected 2",
+    ):
+        read_pon_metadata(pon_path)
+    with pytest.raises(
+        ValueError,
+        match="Unsupported PON evidence policy version 1; expected 2",
+    ):
+        list(read_pon_evidence(pon_path))
+
+
+def test_validate_pon_rejects_policy_one_artifact(tmp_path) -> None:
+    pon_path = tmp_path / "legacy.pon.bcf"
+    _write_policy_one_pon(pon_path)
+
+    result = validate_pon(pon_path)
+
+    assert result.valid is False
+    assert result.errors == (
+        "Unsupported PON evidence policy version 1; expected 2",
+    )
+
+
+def test_cached_annotation_rejects_policy_one_pon_before_output(tmp_path) -> None:
+    pon_path = tmp_path / "legacy.pon.bcf"
+    output_path = tmp_path / "annotated.vcf"
+    _write_policy_one_pon(pon_path)
+    case = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unsupported PON evidence policy version 1; expected 2",
+    ):
+        annotate_vcf_with_pon(case, pon_path, output_path=output_path)
+
+    assert not output_path.exists()
 
 
 def test_validate_pon_checks_records_and_requires_a_csi_index(tmp_path) -> None:
@@ -686,7 +783,21 @@ def test_build_pon_rejects_invalid_artifact_prior_before_writing(tmp_path) -> No
     assert not (tmp_path / "unused.bcf.csi").exists()
 
 
-def test_build_pon_rejects_unsupported_target_before_writing(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("ref", "alt", "status"),
+    [
+        ("A", "T,C", "UNSUPPORTED_MULTIALLELIC"),
+        ("A", "A", "UNSUPPORTED_COMPLEX_ALLELE"),
+        ("A", "CT", "UNSUPPORTED_COMPLEX_ALLELE"),
+        ("AT", "C", "UNSUPPORTED_COMPLEX_ALLELE"),
+    ],
+)
+def test_build_pon_rejects_unsupported_target_before_writing(
+    tmp_path,
+    ref: str,
+    alt: str,
+    status: str,
+) -> None:
     target_path = tmp_path / "unsupported.vcf"
     output_path = tmp_path / "unused.bcf"
     target_path.write_text(
@@ -695,17 +806,18 @@ def test_build_pon_rejects_unsupported_target_before_writing(tmp_path) -> None:
                 "##fileformat=VCFv4.2",
                 "##contig=<ID=chr1>",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
-                "chr1\t106\t.\tA\tT,C\t.\tPASS\t.",
+                f"chr1\t106\t.\t{ref}\t{alt}\t.\tPASS\t.",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="UNSUPPORTED_MULTIALLELIC"):
+    with pytest.raises(ValueError, match=status):
         build_pon(
             target_path,
             normal_alignments=[_normal("N1", [])],
             output_path=output_path,
         )
     assert not output_path.exists()
+    assert not (tmp_path / "unused.bcf.csi").exists()

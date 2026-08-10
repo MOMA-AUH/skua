@@ -442,6 +442,8 @@ def test_annotate_vcf_supports_simple_insertion(tmp_path) -> None:
                 (8, 107),
                 (9, 108),
             ],
+            reference_start=100,
+            cigartuples=((0, 1), (1, 1), (0, 8)),
             tags={"RG": "case-rg"},
         ),
     ]
@@ -1042,6 +1044,9 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
                 "chr1\t109\t.\tA\tA]chr2:42]\t.\tPASS\t.\tGT\t0/1",
                 "chr1\t110\t.\tAT\tGCA\t.\tPASS\t.\tGT\t0/1",
                 "chr1\t111\t.\tA\t.\t.\tPASS\t.\tGT\t0/0",
+                "chr1\t112\t.\tA\tA\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t113\t.\tA\tCT\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t114\t.\tAT\tC\t.\tPASS\t.\tGT\t0/1",
             ]
         )
         + "\n",
@@ -1065,9 +1070,13 @@ def test_annotate_vcf_with_normals_reports_record_statuses_and_summary(tmp_path)
             "UNSUPPORTED_BREAKEND",
             "UNSUPPORTED_COMPLEX_ALLELE",
             "UNSUPPORTED_RECORD",
+            "UNSUPPORTED_COMPLEX_ALLELE",
+            "UNSUPPORTED_COMPLEX_ALLELE",
+            "UNSUPPORTED_COMPLEX_ALLELE",
         ]
         assert records[0].samples["CASE"]["SKUA_ALT_FWD"] == 1
         assert "SKUA_ALT_FWD" not in records[1].format
+        assert all("SKUA_ALT_FWD" not in record.format for record in records[6:])
 
 
 def test_annotate_vcf_with_normals_strict_mode_rejects_unsupported_records_before_output(
@@ -1082,7 +1091,7 @@ def test_annotate_vcf_with_normals_strict_mode_rejects_unsupported_records_befor
                 "##contig=<ID=chr1>",
                 "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
-                "chr1\t106\t.\tA\tC,G\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t106\t.\tA\tCT\t.\tPASS\t.\tGT\t0/1",
             ]
         )
         + "\n",
@@ -1090,7 +1099,7 @@ def test_annotate_vcf_with_normals_strict_mode_rejects_unsupported_records_befor
     )
     output_path = tmp_path / "annotated.vcf"
 
-    with pytest.raises(ValueError, match="UNSUPPORTED_MULTIALLELIC"):
+    with pytest.raises(ValueError, match="UNSUPPORTED_COMPLEX_ALLELE"):
         annotate_vcf_with_normals(
             alignment_file,
             vcf_path,

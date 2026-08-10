@@ -13,7 +13,7 @@ from .variants import Variant
 
 
 PON_SCHEMA_VERSION = 1
-EVIDENCE_POLICY_VERSION = 1
+EVIDENCE_POLICY_VERSION = 2
 PON_HEADER_KEY = "SKUA_PON"
 
 PON_EVIDENCE_FORMAT_FIELDS: tuple[tuple[str, str], ...] = (

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pysam
+import pytest
 
 from skua.evidence import (
     UnusableReason,
@@ -436,6 +437,183 @@ def test_collect_evidence_from_alignment_requires_exact_deletion_length(
     assert counts.alt_forward == 1
     assert counts.non_alt_forward == 1
     assert counts.usable == 2
+
+
+def test_collect_evidence_does_not_treat_soft_clip_as_insertion(tmp_path: Path) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="soft_clipped",
+                query_sequence="AT",
+                reference_start=100,
+                cigar=((0, 1), (4, 1)),  # 1M1S, not 1M1I.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base="A",
+            alt_base="AT",
+        )
+
+    assert counts.alt_forward == 0
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason[UnusableReason.NO_BASE_AT_SITE] == 1
+
+
+def test_collect_evidence_counts_flanked_cigar_insertion(tmp_path: Path) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="insertion",
+                query_sequence="ATA",
+                reference_start=100,
+                cigar=((0, 1), (1, 1), (0, 1)),  # 1M1I1M.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base="A",
+            alt_base="AT",
+        )
+
+    assert counts.alt_forward == 1
+    assert counts.usable == 1
+    assert counts.unusable == 0
+
+
+def test_collect_evidence_does_not_treat_reference_skip_as_deletion(
+    tmp_path: Path,
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="reference_skip",
+                query_sequence="AA",
+                reference_start=100,
+                cigar=((0, 1), (3, 1), (0, 1)),  # 1M1N1M, not 1M1D1M.
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base="AT",
+            alt_base="A",
+        )
+
+    assert counts.alt_forward == 0
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason[UnusableReason.NO_BASE_AT_SITE] == 1
+
+
+@pytest.mark.parametrize(
+    ("query_sequence", "cigar", "ref_base", "alt_base"),
+    [
+        ("A", ((0, 1),), "A", "AT"),  # No right flank after the anchor.
+        ("AT", ((0, 1), (1, 1)), "A", "AT"),  # Terminal insertion.
+        ("ATA", ((0, 1), (1, 1), (2, 1), (0, 1)), "A", "AT"),
+        ("A", ((0, 1), (2, 1)), "AT", "A"),  # Terminal deletion.
+        ("ATA", ((0, 1), (2, 1), (1, 1), (0, 1)), "AT", "A"),
+        ("ATAA", ((0, 1), (1, 1), (0, 2)), "AT", "A"),
+    ],
+)
+def test_collect_evidence_requires_clean_right_flank_for_indels(
+    tmp_path: Path,
+    query_sequence: str,
+    cigar: tuple[tuple[int, int], ...],
+    ref_base: str,
+    alt_base: str,
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name="unflanked_or_complex",
+                query_sequence=query_sequence,
+                reference_start=100,
+                cigar=cigar,
+            ),
+        ],
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base=ref_base,
+            alt_base=alt_base,
+        )
+
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason == {UnusableReason.NO_BASE_AT_SITE: 1}
+
+
+def test_collect_evidence_handles_missing_base_qualities(tmp_path: Path) -> None:
+    read = build_aligned_segment(
+        query_name="missing_qualities",
+        query_sequence="T",
+        reference_start=100,
+    )
+    read.query_qualities = None
+    bam_path = create_test_bam(tmp_path, [read])
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 0
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason[UnusableReason.MISSING_BASEQ] == 1
+
+
+def test_collect_evidence_handles_missing_query_sequence(tmp_path: Path) -> None:
+    read = build_aligned_segment(
+        query_name="missing_sequence",
+        query_sequence="A",
+        reference_start=100,
+    )
+    read.query_sequence = None
+    bam_path = create_test_bam(tmp_path, [read])
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment_file:
+        counts = collect_evidence_from_alignment(
+            alignment_file,
+            contig="chr1",
+            ref_pos0=100,
+            ref_base="A",
+            alt_base="T",
+        )
+
+    assert counts.alt_forward == 0
+    assert counts.usable == 0
+    assert counts.unusable == 1
+    assert counts.unusable_by_reason[UnusableReason.NO_BASE_AT_SITE] == 1
 
 
 def test_collect_evidence_from_alignment_scopes_query_names_to_read_group(

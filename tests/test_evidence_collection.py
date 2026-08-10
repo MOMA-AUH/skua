@@ -1,3 +1,5 @@
+import pytest
+
 from skua.evidence import UnusableReason, collect_evidence
 from tests.helpers import FakeRead, build_linear_pairs
 
@@ -107,3 +109,13 @@ def test_collect_evidence_handles_empty_reads() -> None:
     assert counts.usable == 0
     assert counts.unusable == 0
     assert counts.unusable_by_reason == {}
+
+
+def test_collect_evidence_rejects_invalid_alleles_without_reads() -> None:
+    with pytest.raises(ValueError, match="different"):
+        collect_evidence(
+            [],
+            ref_pos0=105,
+            ref_base="A",
+            alt_base="A",
+        )

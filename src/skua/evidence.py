@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import Enum, IntFlag
 from typing import Any
 
-from .variants import Variant
+from .variants import Variant, _normalize_simple_alleles
 
 
 class AlleleSupport(str, Enum):
@@ -24,6 +24,7 @@ class UnusableReason(str, Enum):
 
     LOW_MAPQ = "low_mapq"
     LOW_BASEQ = "low_baseq"
+    MISSING_BASEQ = "missing_baseq"
     NO_BASE_AT_SITE = "no_base_at_site"
     INVALID_BASE = "invalid_base"
     CONFLICTING_MATES = "conflicting_mates"
@@ -113,6 +114,24 @@ class AggregatedEvidence:
     unusable_by_reason: dict[UnusableReason, int]
 
 
+_CIGAR_ALIGNED_OPS = frozenset({0, 7, 8})  # M, =, X
+_CIGAR_INSERTION = 1
+_CIGAR_DELETION = 2
+_CIGAR_REFERENCE_SKIP = 3
+_CIGAR_SOFT_CLIP = 4
+_CIGAR_HARD_CLIP = 5
+_CIGAR_PADDING = 6
+
+
+@dataclass(frozen=True)
+class _AlignmentPositions:
+    """Operation-aware alignment positions reused across variant calls."""
+
+    pairs: tuple[tuple[int | None, int | None, int | None], ...]
+    ref_to_query: dict[int, int | None]
+    ref_to_pair_index: dict[int, int]
+
+
 def _preferred_mate(
     read_calls: list[tuple[Any, ReadAlleleCall]],
 ) -> tuple[Any, ReadAlleleCall]:
@@ -153,21 +172,37 @@ def _resolve_fragment_call(
     return _preferred_mate(usable_read_calls)[1]
 
 
-def _query_position_bases_and_qualities(read: Any, query_positions: list[int], *, min_baseq: int) -> tuple[str | None, UnusableReason | None, str | None]:
+def _query_position_bases_and_qualities(
+    read: Any,
+    query_positions: Sequence[int],
+    *,
+    min_baseq: int,
+) -> tuple[str | None, UnusableReason | None, str | None]:
     """Return the observed read sequence across query positions or an unusable reason."""
     observed_bases: list[str] = []
     sequence = read.query_sequence
     qualities = read.query_qualities
 
+    if sequence is None:
+        return None, UnusableReason.NO_BASE_AT_SITE, None
+    if qualities is None:
+        return None, UnusableReason.MISSING_BASEQ, None
+
     for query_pos in query_positions:
-        if query_pos is None or query_pos < 0 or query_pos >= len(sequence):
+        if query_pos < 0 or query_pos >= len(sequence):
             return None, UnusableReason.NO_BASE_AT_SITE, None
+
+        if query_pos >= len(qualities):
+            return None, UnusableReason.MISSING_BASEQ, None
 
         observed_base = sequence[query_pos]
         if observed_base not in {"A", "C", "G", "T"}:
             return None, UnusableReason.INVALID_BASE, observed_base
 
-        if qualities[query_pos] < min_baseq:
+        base_quality = qualities[query_pos]
+        if base_quality == 255:
+            return None, UnusableReason.MISSING_BASEQ, observed_base
+        if base_quality < min_baseq:
             return None, UnusableReason.LOW_BASEQ, observed_base
 
         observed_bases.append(observed_base)
@@ -175,14 +210,83 @@ def _query_position_bases_and_qualities(read: Any, query_positions: list[int], *
     return "".join(observed_bases), None, None
 
 
-def _ref_position_map(read: Any) -> dict[int, int | None]:
-    """Map each reference position in the alignment to its query position or None."""
+def _alignment_positions(read: Any) -> _AlignmentPositions:
+    """Expand a read's CIGAR while retaining the operation behind each gap."""
+    cigar = getattr(read, "cigartuples", None)
+    reference_start = getattr(read, "reference_start", None)
+    pairs: list[tuple[int | None, int | None, int | None]] = []
+
+    if cigar is not None and reference_start is not None:
+        query_pos = 0
+        ref_pos = int(reference_start)
+        for cigar_op, length in cigar:
+            if length <= 0:
+                pairs.append((None, None, cigar_op))
+                break
+
+            if cigar_op in _CIGAR_ALIGNED_OPS:
+                pairs.extend(
+                    (query_pos + offset, ref_pos + offset, cigar_op)
+                    for offset in range(length)
+                )
+                query_pos += length
+                ref_pos += length
+                continue
+
+            if cigar_op in {_CIGAR_INSERTION, _CIGAR_SOFT_CLIP}:
+                pairs.extend(
+                    (query_pos + offset, None, cigar_op)
+                    for offset in range(length)
+                )
+                query_pos += length
+                continue
+
+            if cigar_op in {_CIGAR_DELETION, _CIGAR_REFERENCE_SKIP}:
+                pairs.extend(
+                    (None, ref_pos + offset, cigar_op)
+                    for offset in range(length)
+                )
+                ref_pos += length
+                continue
+
+            if cigar_op in {_CIGAR_HARD_CLIP, _CIGAR_PADDING}:
+                pairs.append((None, None, cigar_op))
+                continue
+
+            # Unsupported or malformed operations make the rest of the CIGAR
+            # unsafe to interpret at a variant boundary.
+            pairs.append((None, None, cigar_op))
+            break
+    else:
+        # Two-column aligned pairs are sufficient for aligned reference bases,
+        # but their gaps cannot safely be interpreted as I/D rather than S/N.
+        pairs.extend(
+            (
+                query_pos,
+                ref_pos,
+                0 if query_pos is not None and ref_pos is not None else None,
+            )
+            for query_pos, ref_pos in read.aligned_pairs
+        )
+
     ref_to_query: dict[int, int | None] = {}
-    for query_pos, ref_pos in read.aligned_pairs:
+    ref_to_pair_index: dict[int, int] = {}
+    for pair_index, (query_pos, ref_pos, _cigar_op) in enumerate(pairs):
         if ref_pos is None or ref_pos in ref_to_query:
             continue
         ref_to_query[ref_pos] = query_pos
-    return ref_to_query
+        ref_to_pair_index[ref_pos] = pair_index
+
+    return _AlignmentPositions(
+        pairs=tuple(pairs),
+        ref_to_query=ref_to_query,
+        ref_to_pair_index=ref_to_pair_index,
+    )
+
+
+def _ref_position_map(read: Any) -> dict[int, int | None]:
+    """Map each reference position in the alignment to its query position or None."""
+    return _alignment_positions(read).ref_to_query
 
 
 def _query_positions_for_ref_span(
@@ -203,27 +307,119 @@ def _query_positions_for_ref_span(
     return query_positions
 
 
-def _query_positions_for_insertion(read: Any, *, ref_pos0: int) -> list[int] | None:
-    """Return inserted query positions immediately after the anchor base, if any."""
+def _query_positions_for_contiguous_ref_span(
+    alignment_positions: _AlignmentPositions,
+    *,
+    ref_pos0: int,
+    ref_span_len: int,
+) -> list[int] | None:
+    """Return query positions for an uninterrupted aligned CIGAR span."""
+    first_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
+    if first_pair_index is None:
+        return None
+
+    query_positions: list[int] = []
+    for offset in range(ref_span_len):
+        pair_index = first_pair_index + offset
+        if pair_index >= len(alignment_positions.pairs):
+            return None
+        query_pos, ref_pos, cigar_op = alignment_positions.pairs[pair_index]
+        if (
+            query_pos is None
+            or ref_pos != ref_pos0 + offset
+            or cigar_op not in _CIGAR_ALIGNED_OPS
+        ):
+            return None
+        query_positions.append(query_pos)
+    return query_positions
+
+
+def _query_positions_for_insertion(
+    alignment_positions: _AlignmentPositions,
+    *,
+    ref_pos0: int,
+) -> list[int] | None:
+    """Return a flanked CIGAR insertion after the anchor, or None if unobservable."""
+    anchor_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
+    if anchor_pair_index is None:
+        return None
+
+    anchor_query_pos, anchor_ref_pos, anchor_op = alignment_positions.pairs[
+        anchor_pair_index
+    ]
+    if (
+        anchor_query_pos is None
+        or anchor_ref_pos != ref_pos0
+        or anchor_op not in _CIGAR_ALIGNED_OPS
+    ):
+        return None
+
     insertion_query_positions: list[int] = []
-    seen_anchor = False
-
-    for query_pos, ref_pos in read.aligned_pairs:
-        if ref_pos == ref_pos0 and query_pos is not None:
-            seen_anchor = True
-            continue
-
-        if not seen_anchor:
-            continue
-
-        if ref_pos is None and query_pos is not None:
-            insertion_query_positions.append(query_pos)
-            continue
-
-        if ref_pos is not None:
+    pair_index = anchor_pair_index + 1
+    while pair_index < len(alignment_positions.pairs):
+        query_pos, ref_pos, cigar_op = alignment_positions.pairs[pair_index]
+        if cigar_op != _CIGAR_INSERTION:
             break
+        if query_pos is None or ref_pos is not None:
+            return None
+        insertion_query_positions.append(query_pos)
+        pair_index += 1
 
+    if pair_index >= len(alignment_positions.pairs):
+        return None
+
+    flank_query_pos, flank_ref_pos, flank_op = alignment_positions.pairs[pair_index]
+    if (
+        flank_query_pos is None
+        or flank_ref_pos != ref_pos0 + 1
+        or flank_op not in _CIGAR_ALIGNED_OPS
+    ):
+        return None
     return insertion_query_positions
+
+
+def _deleted_reference_positions(
+    alignment_positions: _AlignmentPositions,
+    *,
+    ref_pos0: int,
+) -> list[int] | None:
+    """Return a flanked CIGAR deletion after the anchor, or None if absent/unsafe."""
+    anchor_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
+    if anchor_pair_index is None:
+        return None
+
+    anchor_query_pos, anchor_ref_pos, anchor_op = alignment_positions.pairs[
+        anchor_pair_index
+    ]
+    if (
+        anchor_query_pos is None
+        or anchor_ref_pos != ref_pos0
+        or anchor_op not in _CIGAR_ALIGNED_OPS
+    ):
+        return None
+
+    deleted_ref_positions: list[int] = []
+    pair_index = anchor_pair_index + 1
+    while pair_index < len(alignment_positions.pairs):
+        query_pos, ref_pos, cigar_op = alignment_positions.pairs[pair_index]
+        if cigar_op != _CIGAR_DELETION:
+            break
+        if query_pos is not None or ref_pos is None:
+            return None
+        deleted_ref_positions.append(ref_pos)
+        pair_index += 1
+
+    if not deleted_ref_positions or pair_index >= len(alignment_positions.pairs):
+        return None
+
+    flank_query_pos, flank_ref_pos, flank_op = alignment_positions.pairs[pair_index]
+    if (
+        flank_query_pos is None
+        or flank_ref_pos != deleted_ref_positions[-1] + 1
+        or flank_op not in _CIGAR_ALIGNED_OPS
+    ):
+        return None
+    return deleted_ref_positions
 
 
 def classify_variant_read(
@@ -235,12 +431,15 @@ def classify_variant_read(
     min_baseq: int = 20,
     min_mapq: int = 20,
     ref_to_query: dict[int, int | None] | None = None,
+    alignment_positions: _AlignmentPositions | None = None,
 ) -> ReadAlleleCall:
     """Classify one read as ALT, NON_ALT, or UNUSABLE for a variant.
 
-    ``ref_to_query`` can be supplied by a batch caller to reuse a read's
-    aligned-pair map across every variant that the read overlaps.
+    The alignment caches can be supplied by a batch caller to reuse a read's
+    parsed positions across every variant that the read overlaps.
     """
+    ref_base, alt_base = _normalize_simple_alleles(ref_base, alt_base)
+
     if read.mapping_quality < min_mapq:
         return ReadAlleleCall(
             support=AlleleSupport.UNUSABLE,
@@ -250,6 +449,12 @@ def classify_variant_read(
 
     ref_len = len(ref_base)
     alt_len = len(alt_base)
+
+    if alignment_positions is not None:
+        ref_to_query = alignment_positions.ref_to_query
+    elif ref_to_query is None or ref_len != alt_len:
+        alignment_positions = _alignment_positions(read)
+        ref_to_query = alignment_positions.ref_to_query
 
     # Simple substitutions, including MNVs.
     if ref_len == alt_len:
@@ -289,6 +494,7 @@ def classify_variant_read(
 
     # Simple insertion.
     if ref_len == 1 and alt_len > 1:
+        assert alignment_positions is not None
         query_positions = _query_positions_for_ref_span(
             read,
             ref_pos0=ref_pos0,
@@ -315,11 +521,24 @@ def classify_variant_read(
                 observed_base=observed_base,
             )
 
-        inserted_query_positions = _query_positions_for_insertion(read, ref_pos0=ref_pos0)
-        inserted_sequence, unusable_reason, observed_base = _query_position_bases_and_qualities(
-            read,
-            inserted_query_positions,
-            min_baseq=min_baseq,
+        inserted_query_positions = _query_positions_for_insertion(
+            alignment_positions,
+            ref_pos0=ref_pos0,
+        )
+        if inserted_query_positions is None:
+            return ReadAlleleCall(
+                support=AlleleSupport.UNUSABLE,
+                is_reverse=read.is_reverse,
+                reason=UnusableReason.NO_BASE_AT_SITE,
+            )
+
+        allele_query_positions = query_positions + inserted_query_positions
+        observed_allele, unusable_reason, observed_base = (
+            _query_position_bases_and_qualities(
+                read,
+                allele_query_positions,
+                min_baseq=min_baseq,
+            )
         )
         if unusable_reason is not None:
             return ReadAlleleCall(
@@ -329,18 +548,24 @@ def classify_variant_read(
                 observed_base=observed_base,
             )
 
-        support = AlleleSupport.ALT if inserted_sequence == alt_base[1:] and anchor_bases == ref_base else AlleleSupport.NON_ALT
+        inserted_sequence = observed_allele[1:]
+        support = (
+            AlleleSupport.ALT
+            if inserted_sequence == alt_base[1:] and anchor_bases == ref_base
+            else AlleleSupport.NON_ALT
+        )
         return ReadAlleleCall(
             support=support,
             is_reverse=read.is_reverse,
             observed_base=inserted_sequence,
-            base_quality=min(read.query_qualities[qpos] for qpos in query_positions),
+            base_quality=min(
+                read.query_qualities[qpos] for qpos in allele_query_positions
+            ),
         )
 
     # Simple deletion.
     if ref_len > 1 and alt_len == 1:
-        if ref_to_query is None:
-            ref_to_query = _ref_position_map(read)
+        assert alignment_positions is not None
         if ref_pos0 not in ref_to_query or ref_to_query[ref_pos0] is None:
             return ReadAlleleCall(
                 support=AlleleSupport.UNUSABLE,
@@ -349,10 +574,12 @@ def classify_variant_read(
             )
 
         query_positions = [ref_to_query[ref_pos0]]
-        anchor_bases, unusable_reason, observed_base = _query_position_bases_and_qualities(
-            read,
-            query_positions,
-            min_baseq=min_baseq,
+        anchor_bases, unusable_reason, observed_base = (
+            _query_position_bases_and_qualities(
+                read,
+                query_positions,
+                min_baseq=min_baseq,
+            )
         )
         if unusable_reason is not None:
             return ReadAlleleCall(
@@ -362,32 +589,40 @@ def classify_variant_read(
                 observed_base=observed_base,
             )
 
-        deletion_query_positions: list[int | None] = []
-        for target_ref_pos in range(ref_pos0 + 1, ref_pos0 + ref_len):
-            if target_ref_pos not in ref_to_query:
+        reference_query_positions = _query_positions_for_contiguous_ref_span(
+            alignment_positions,
+            ref_pos0=ref_pos0,
+            ref_span_len=ref_len + 1,
+        )
+        if reference_query_positions is not None:
+            support = AlleleSupport.NON_ALT
+        else:
+            deleted_ref_positions = _deleted_reference_positions(
+                alignment_positions,
+                ref_pos0=ref_pos0,
+            )
+            if deleted_ref_positions is None:
                 return ReadAlleleCall(
                     support=AlleleSupport.UNUSABLE,
                     is_reverse=read.is_reverse,
                     reason=UnusableReason.NO_BASE_AT_SITE,
                 )
-            deletion_query_positions.append(ref_to_query[target_ref_pos])
 
-        next_ref_pos = ref_pos0 + ref_len
-        deletion_extends_beyond_variant = (
-            next_ref_pos in ref_to_query and ref_to_query[next_ref_pos] is None
-        )
-        support = (
-            AlleleSupport.ALT
-            if all(query_pos is None for query_pos in deletion_query_positions)
-            and not deletion_extends_beyond_variant
-            and anchor_bases == ref_base[:1]
-            else AlleleSupport.NON_ALT
-        )
+            expected_deleted_positions = list(
+                range(ref_pos0 + 1, ref_pos0 + ref_len)
+            )
+            support = (
+                AlleleSupport.ALT
+                if deleted_ref_positions == expected_deleted_positions
+                and anchor_bases == ref_base[:1]
+                else AlleleSupport.NON_ALT
+            )
+
         return ReadAlleleCall(
             support=support,
             is_reverse=read.is_reverse,
             observed_base=ref_base,
-            base_quality=min(read.query_qualities[qpos] for qpos in query_positions if qpos is not None),
+            base_quality=min(read.query_qualities[qpos] for qpos in query_positions),
         )
 
     raise ValueError("Only simple substitutions and simple indels are supported")
@@ -445,6 +680,7 @@ def collect_evidence(
     min_mapq: int = 20,
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one variant from an iterable of reads."""
+    ref_base, alt_base = _normalize_simple_alleles(ref_base, alt_base)
     calls = [
         classify_variant_read(
             read,
@@ -476,6 +712,7 @@ def collect_evidence_from_alignment(
     those read groups contribute evidence. This is used to isolate one sample
     from a multi-sample alignment.
     """
+    ref_base, alt_base = _normalize_simple_alleles(ref_base, alt_base)
     reads = (
         read
         for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
@@ -584,9 +821,12 @@ def collect_evidence_from_alignment_batch(
         else:
             fragment_key = (read_group_id, query_name)
 
+        alignment_positions = (
+            _alignment_positions(read) if read.mapping_quality >= min_mapq else None
+        )
         ref_to_query = (
-            _ref_position_map(read)
-            if read.mapping_quality >= min_mapq
+            alignment_positions.ref_to_query
+            if alignment_positions is not None
             else None
         )
 
@@ -600,6 +840,7 @@ def collect_evidence_from_alignment_batch(
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
                 ref_to_query=ref_to_query,
+                alignment_positions=alignment_positions,
             )
             fragments_by_variant[original_index].setdefault(fragment_key, []).append(
                 (read, read_call)

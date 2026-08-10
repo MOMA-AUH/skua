@@ -21,6 +21,13 @@ def test_variant_from_vcf_fields_normalizes_alleles_to_uppercase() -> None:
     assert variant.alt == "T"
 
 
+def test_direct_variant_construction_normalizes_alleles_to_uppercase() -> None:
+    variant = Variant(contig="chr7", ref_pos0=105, ref="a", alt="t")
+
+    assert variant.ref == "A"
+    assert variant.alt == "T"
+
+
 def test_variant_from_vcf_fields_parses_simple_deletion() -> None:
     variant = Variant.from_vcf_fields(contig="chr1", pos1=10, ref="AT", alt="A")
 
@@ -39,6 +46,48 @@ def test_variant_from_vcf_fields_parses_simple_insertion() -> None:
     assert variant.ref == "A"
     assert variant.alt == "AT"
     assert variant.kind.value == "insertion"
+
+
+@pytest.mark.parametrize(
+    ("ref", "alt"),
+    [
+        ("A", "A"),
+        ("A", "CT"),
+        ("AT", "C"),
+    ],
+)
+def test_variant_rejects_identity_and_non_anchored_alleles(ref: str, alt: str) -> None:
+    with pytest.raises(ValueError, match="simple|different"):
+        Variant.from_vcf_fields(contig="chr1", pos1=10, ref=ref, alt=alt)
+
+    with pytest.raises(ValueError, match="simple|different"):
+        Variant(contig="chr1", ref_pos0=9, ref=ref, alt=alt)
+
+
+@pytest.mark.parametrize(
+    ("contig", "ref_pos0", "ref", "alt", "message"),
+    [
+        ("", 9, "A", "T", "contig"),
+        ("chr1", -1, "A", "T", "ref_pos0"),
+        ("chr1", 9, "", "T", "non-empty"),
+        ("chr1", 9, "N", "T", "only A"),
+        ("chr1", 9, "AT", "GCA", "simple"),
+    ],
+)
+def test_direct_variant_construction_rejects_invalid_values(
+    contig: str,
+    ref_pos0: int,
+    ref: str,
+    alt: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Variant(contig=contig, ref_pos0=ref_pos0, ref=ref, alt=alt)
+
+
+def test_variant_from_vcf_fields_rejects_non_positive_position() -> None:
+    with pytest.raises(ValueError, match="VCF POS"):
+        Variant.from_vcf_fields(contig="chr1", pos1=0, ref="A", alt="T")
 
 
 def test_parse_vcf_variant_line_parses_data_line() -> None:
@@ -68,6 +117,17 @@ def test_parse_vcf_variant_line_parses_simple_indels() -> None:
 
 def test_parse_vcf_variant_line_skips_multiallelic_records() -> None:
     assert parse_vcf_variant_line("chr1\t106\t.\tA\tT,C\t.\tPASS\t.") is None
+
+
+@pytest.mark.parametrize(
+    ("ref", "alt"),
+    [("A", "A"), ("A", "CT"), ("AT", "C")],
+)
+def test_parse_vcf_variant_line_skips_identity_and_non_anchored_alleles(
+    ref: str,
+    alt: str,
+) -> None:
+    assert parse_vcf_variant_line(f"chr1\t106\t.\t{ref}\t{alt}\t.\tPASS\t.") is None
 
 
 def test_read_vcf_variant_file_yields_simple_records_only(tmp_path) -> None:

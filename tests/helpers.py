@@ -13,9 +13,11 @@ class FakeAlignmentHeader:
 class FakeRead:
     mapping_quality: int
     is_reverse: bool
-    query_sequence: str
-    query_qualities: list[int]
+    query_sequence: str | None
+    query_qualities: list[int] | None
     aligned_pairs: list[tuple[int | None, int | None]]
+    reference_start: int | None = None
+    cigartuples: tuple[tuple[int, int], ...] | None = None
     query_name: str | None = None
     flag: int = 0x3
     tags: dict[str, str] = field(default_factory=dict)

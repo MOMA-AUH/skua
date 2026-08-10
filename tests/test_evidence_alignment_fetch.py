@@ -169,7 +169,7 @@ def test_batch_collection_fetches_dense_variants_once_with_site_parity() -> None
     assert batch_evidences == site_evidences
 
 
-def test_batch_collection_builds_each_read_position_map_once(monkeypatch) -> None:
+def test_batch_collection_builds_each_read_alignment_positions_once(monkeypatch) -> None:
     variants = (
         Variant(contig="chr1", ref_pos0=105, ref="A", alt="T"),
         Variant(contig="chr1", ref_pos0=108, ref="A", alt="C"),
@@ -193,15 +193,19 @@ def test_batch_collection_builds_each_read_position_map_once(monkeypatch) -> Non
         ),
     ]
     alignment = FakeAlignmentFile(reads)
-    original_ref_position_map = evidence_module._ref_position_map
+    original_alignment_positions = evidence_module._alignment_positions
     calls = 0
 
-    def count_ref_position_maps(read):
+    def count_alignment_positions(read):
         nonlocal calls
         calls += 1
-        return original_ref_position_map(read)
+        return original_alignment_positions(read)
 
-    monkeypatch.setattr(evidence_module, "_ref_position_map", count_ref_position_maps)
+    monkeypatch.setattr(
+        evidence_module,
+        "_alignment_positions",
+        count_alignment_positions,
+    )
 
     collect_evidence_from_alignment_batch(alignment, variants)
 
@@ -296,6 +300,8 @@ def test_batch_collection_matches_site_collection_for_insertion_and_snv() -> Non
                 (8, 107),
                 (9, 108),
             ],
+            reference_start=100,
+            cigartuples=((0, 1), (1, 1), (0, 8)),
         ),
         FakeRead(
             query_name="ref",

@@ -2,7 +2,7 @@
 
 [![Conda Version](https://img.shields.io/conda/vn/MOMA-AUH/skua?style=for-the-badge&cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua) [![Conda Downloads](https://img.shields.io/conda/dn/MOMA-AUH/skua?style=for-the-badge&cacheSeconds=300)](https://anaconda.org/MOMA-AUH/skua)
 
-Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads, with support for substitutions, MNVs, and simple insertions and deletions. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
+Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads, with support for substitutions, MNVs, and left-anchored simple insertions and deletions. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
 ## Installation
 
@@ -71,6 +71,11 @@ group and query name. Agreeing usable mates count once on the first mate's
 strand; one usable mate takes precedence over an unusable mate; conflicting
 usable mates count once as unusable; and two unusable mates count once as
 unusable.
+
+Indel support requires an explicit CIGAR insertion or deletion immediately
+after the left anchor and an aligned base on the right. Soft clips, reference
+skips, terminal or adjacent complex events, and reads without sequence or base
+qualities are unusable rather than ALT or reference evidence.
 
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
@@ -195,7 +200,7 @@ reference assembly, alignment/evidence policy, or quality thresholds change.
 ## Python API
 
 The supported library API is available directly from `skua`. It accepts
-substitutions, MNVs, and simple insertions and deletions.
+substitutions, MNVs, and left-anchored simple insertions and deletions.
 
 ```python
 import pysam
