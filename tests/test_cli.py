@@ -1,7 +1,9 @@
 from pathlib import Path
+import json
 
 import skua.cli as cli
 from skua import __version__
+from skua.pon import PonInspection, PonValidationResult
 
 
 def test_main_version_prints_version_and_exits_successfully(capsys) -> None:
@@ -32,6 +34,97 @@ def test_main_annotate_requires_normal_list_or_precomputed_pon(capsys) -> None:
         raise AssertionError("Expected SystemExit for missing PON source")
 
     assert "one of the arguments --normal-list --pon is required" in capsys.readouterr().err
+
+
+def _pon_inspection() -> PonInspection:
+    return PonInspection(
+        path="panel.pon.bcf",
+        format="BCF",
+        index_present=True,
+        metadata_record_count=1,
+        schema_version="1",
+        evidence_policy_version="1",
+        min_baseq="20",
+        min_mapq="20",
+        skua_version="0.5.0",
+        sample_names=("N1", "N2"),
+    )
+
+
+def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "inspect_pon", lambda path: _pon_inspection())
+
+    assert cli.main(["pon", "inspect", "panel.pon.bcf"]) == 0
+    assert "PON: panel.pon.bcf" in capsys.readouterr().out
+
+    assert cli.main(["pon", "inspect", "panel.pon.bcf", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "evidence_policy_version": "1",
+        "format": "BCF",
+        "index_present": True,
+        "metadata_record_count": 1,
+        "min_baseq": "20",
+        "min_mapq": "20",
+        "path": "panel.pon.bcf",
+        "sample_count": 2,
+        "sample_names": ["N1", "N2"],
+        "schema_version": "1",
+        "skua_version": "0.5.0",
+    }
+
+
+def test_main_pon_validate_reports_result_and_forwards_optional_checks(monkeypatch, capsys) -> None:
+    calls: list[tuple[Path, Path | None, Path | None]] = []
+
+    def fake_validate(path, *, reference_path=None, target_vcf_path=None):
+        calls.append((path, reference_path, target_vcf_path))
+        return PonValidationResult(inspection=_pon_inspection(), errors=())
+
+    monkeypatch.setattr(cli, "validate_pon", fake_validate)
+
+    assert cli.main(
+        [
+            "pon",
+            "validate",
+            "panel.pon.bcf",
+            "--reference",
+            "reference.fa",
+            "--targets",
+            "hotspots.vcf.gz",
+        ]
+    ) == 0
+    assert capsys.readouterr().out == "PON validation passed: panel.pon.bcf\n"
+    assert calls == [(Path("panel.pon.bcf"), Path("reference.fa"), Path("hotspots.vcf.gz"))]
+
+
+def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "validate_pon",
+        lambda path, **kwargs: PonValidationResult(
+            inspection=_pon_inspection(),
+            errors=("PON artifact is missing its .csi index",),
+        ),
+    )
+
+    assert cli.main(["pon", "validate", "panel.pon.bcf", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "errors": ["PON artifact is missing its .csi index"],
+        "inspection": {
+            "evidence_policy_version": "1",
+            "format": "BCF",
+            "index_present": True,
+            "metadata_record_count": 1,
+            "min_baseq": "20",
+            "min_mapq": "20",
+            "path": "panel.pon.bcf",
+            "sample_count": 2,
+            "sample_names": ["N1", "N2"],
+            "schema_version": "1",
+            "skua_version": "0.5.0",
+        },
+        "valid": False,
+    }
 
 
 def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_path) -> None:

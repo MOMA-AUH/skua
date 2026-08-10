@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import ExitStack
+import json
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .core import (
     annotate_vcf_with_pon,
     build_pon,
 )
+from .pon import PonInspection, inspect_pon, validate_pon
 
 
 class OptionalDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -226,6 +228,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_evidence_arguments(pon_build_parser, default=20)
 
+    pon_inspect_parser = pon_subparsers.add_parser(
+        "inspect",
+        help="Show PON header metadata without validating compatibility",
+        formatter_class=OptionalDefaultsHelpFormatter,
+    )
+    pon_inspect_parser.add_argument("pon", help="Precomputed PON BCF path")
+    pon_inspect_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Write inspection metadata as JSON",
+    )
+
+    pon_validate_parser = pon_subparsers.add_parser(
+        "validate",
+        help="Validate PON structure and optional reference/target compatibility",
+        formatter_class=OptionalDefaultsHelpFormatter,
+    )
+    pon_validate_parser.add_argument("pon", help="Precomputed PON BCF path")
+    pon_validate_parser.add_argument(
+        "--reference",
+        help="Reference FASTA used to validate PON REF alleles",
+    )
+    pon_validate_parser.add_argument(
+        "--targets",
+        help="Target VCF expected to define exactly the PON targets",
+    )
+    pon_validate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Write validation result as JSON",
+    )
+
     return parser
 
 
@@ -322,6 +356,58 @@ def _run_pon_build(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     return 0
 
 
+def _format_pon_inspection(inspection: PonInspection) -> str:
+    """Render header-level PON metadata for a human terminal."""
+    def value_or_missing(value: str | None) -> str:
+        return value if value is not None else "<missing>"
+
+    sample_names = ", ".join(inspection.sample_names) or "<none>"
+    return "\n".join(
+        (
+            f"PON: {inspection.path}",
+            f"Format: {inspection.format}",
+            f"CSI index: {'present' if inspection.index_present else 'missing'}",
+            f"PON metadata records: {inspection.metadata_record_count}",
+            f"Schema version: {value_or_missing(inspection.schema_version)}",
+            "Evidence policy version: "
+            f"{value_or_missing(inspection.evidence_policy_version)}",
+            f"Minimum base quality: {value_or_missing(inspection.min_baseq)}",
+            f"Minimum mapping quality: {value_or_missing(inspection.min_mapq)}",
+            f"Skua version: {value_or_missing(inspection.skua_version)}",
+            f"Normal samples ({len(inspection.sample_names)}): {sample_names}",
+        )
+    )
+
+
+def _run_pon_inspect(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    try:
+        inspection = inspect_pon(Path(args.pon))
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+
+    if args.json:
+        print(json.dumps(inspection.as_dict(), indent=2, sort_keys=True))
+    else:
+        print(_format_pon_inspection(inspection))
+    return 0
+
+
+def _run_pon_validate(_parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    result = validate_pon(
+        Path(args.pon),
+        reference_path=Path(args.reference) if args.reference is not None else None,
+        target_vcf_path=Path(args.targets) if args.targets is not None else None,
+    )
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    elif result.valid:
+        print(f"PON validation passed: {args.pon}")
+    else:
+        for error in result.errors:
+            print(f"PON validation failed: {error}")
+    return 0 if result.valid else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the skua CLI."""
     parser = build_parser()
@@ -329,8 +415,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "annotate":
         return _run_annotate(parser, args)
-    if args.command == "pon" and args.pon_command == "build":
-        return _run_pon_build(parser, args)
+    if args.command == "pon":
+        if args.pon_command == "build":
+            return _run_pon_build(parser, args)
+        if args.pon_command == "inspect":
+            return _run_pon_inspect(parser, args)
+        if args.pon_command == "validate":
+            return _run_pon_validate(parser, args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2

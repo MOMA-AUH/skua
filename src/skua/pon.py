@@ -47,6 +47,59 @@ class PonArtifactMetadata:
     sample_names: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class PonInspection:
+    """Header-level facts reported by ``skua pon inspect``."""
+
+    path: str
+    format: str
+    index_present: bool
+    metadata_record_count: int
+    schema_version: str | None
+    evidence_policy_version: str | None
+    min_baseq: str | None
+    min_mapq: str | None
+    skua_version: str | None
+    sample_names: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready representation of this inspection."""
+        return {
+            "path": self.path,
+            "format": self.format,
+            "index_present": self.index_present,
+            "metadata_record_count": self.metadata_record_count,
+            "schema_version": self.schema_version,
+            "evidence_policy_version": self.evidence_policy_version,
+            "min_baseq": self.min_baseq,
+            "min_mapq": self.min_mapq,
+            "skua_version": self.skua_version,
+            "sample_count": len(self.sample_names),
+            "sample_names": list(self.sample_names),
+        }
+
+
+@dataclass(frozen=True)
+class PonValidationResult:
+    """Outcome reported by ``skua pon validate``."""
+
+    inspection: PonInspection | None
+    errors: tuple[str, ...]
+
+    @property
+    def valid(self) -> bool:
+        """Return whether the artifact passed every requested validation."""
+        return not self.errors
+
+    def as_dict(self) -> dict[str, object]:
+        """Return a JSON-ready representation of this validation result."""
+        return {
+            "valid": self.valid,
+            "errors": list(self.errors),
+            "inspection": None if self.inspection is None else self.inspection.as_dict(),
+        }
+
+
 def _unquote_header_value(value: Any) -> str:
     text = str(value)
     if len(text) >= 2 and text[0] == text[-1] == '"':
@@ -54,17 +107,51 @@ def _unquote_header_value(value: Any) -> str:
     return text
 
 
+def _metadata_records(header: Any) -> list[Any]:
+    """Return every PON provenance record found in a VCF header."""
+    return [record for record in header.records if record.key == PON_HEADER_KEY]
+
+
+def _metadata_items_from_record(record: Any) -> dict[str, str]:
+    """Return normalized metadata values from one PON provenance record."""
+    return {
+        key: _unquote_header_value(value)
+        for key, value in record.items()
+        if key != "IDX"
+    }
+
+
 def _metadata_items(header: Any) -> dict[str, str]:
-    records = [record for record in header.records if record.key == PON_HEADER_KEY]
+    records = _metadata_records(header)
     if len(records) != 1:
         raise ValueError(
             f"PON artifact must contain exactly one {PON_HEADER_KEY} metadata record"
         )
-    return {
-        key: _unquote_header_value(value)
-        for key, value in records[0].items()
-        if key != "IDX"
-    }
+    return _metadata_items_from_record(records[0])
+
+
+def inspect_pon(path: str | Path) -> PonInspection:
+    """Read PON header metadata without requiring a supported artifact schema."""
+    path_obj = Path(path)
+    with pysam.VariantFile(str(path_obj)) as pon_file:
+        metadata_records = _metadata_records(pon_file.header)
+        metadata = (
+            _metadata_items_from_record(metadata_records[0])
+            if len(metadata_records) == 1
+            else {}
+        )
+        return PonInspection(
+            path=str(path_obj),
+            format=pon_file.format,
+            index_present=Path(f"{path_obj}.csi").is_file(),
+            metadata_record_count=len(metadata_records),
+            schema_version=metadata.get("SchemaVersion"),
+            evidence_policy_version=metadata.get("EvidencePolicyVersion"),
+            min_baseq=metadata.get("MinBaseQ"),
+            min_mapq=metadata.get("MinMapQ"),
+            skua_version=metadata.get("SkuaVersion"),
+            sample_names=tuple(pon_file.header.samples),
+        )
 
 
 def _parse_metadata(header: Any) -> PonArtifactMetadata:
@@ -127,6 +214,193 @@ def read_pon_metadata(path: str | Path) -> PonArtifactMetadata:
         if pon_file.format != "BCF":
             raise ValueError("PON artifact must be BCF")
         return _parse_metadata(pon_file.header)
+
+
+def _variant_from_record(record: Any, *, source_label: str) -> Variant:
+    """Build a supported PON target variant or raise a descriptive error."""
+    alts = record.alts or ()
+    if len(alts) != 1:
+        raise ValueError(
+            f"{source_label} contains a non-biallelic record at {record.contig}:{record.pos}"
+        )
+    alt = alts[0]
+    if any(base not in {"A", "C", "G", "T"} for base in record.ref.upper() + alt.upper()):
+        raise ValueError(
+            f"{source_label} contains a non-standard allele at {record.contig}:{record.pos}"
+        )
+    try:
+        return Variant.from_vcf_fields(
+            contig=record.contig,
+            pos1=record.pos,
+            ref=record.ref,
+            alt=alt,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{source_label} contains an unsupported allele at {record.contig}:{record.pos}"
+        ) from exc
+
+
+def _validate_index(path: Path, errors: list[str]) -> None:
+    """Require a readable CSI index for a PON artifact."""
+    if not Path(f"{path}.csi").is_file():
+        errors.append("PON artifact is missing its .csi index")
+        return
+    try:
+        with pysam.VariantFile(str(path)) as pon_file:
+            next(pon_file.fetch(), None)
+    except (OSError, ValueError, pysam.SamtoolsError) as exc:
+        errors.append(f"PON artifact has an unreadable .csi index: {exc}")
+
+
+def _validate_header(header: Any, errors: list[str]) -> PonArtifactMetadata | None:
+    """Validate all header invariants needed to interpret PON evidence."""
+    try:
+        metadata = _parse_metadata(header)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return None
+
+    if len(set(metadata.sample_names)) != len(metadata.sample_names):
+        errors.append("PON artifact contains duplicate normal sample names")
+
+    for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS:
+        field = header.formats[field_id]
+        if field.number != 1 or field.type != "Integer":
+            errors.append(
+                f"PON artifact has an incompatible {field_id} FORMAT definition; "
+                "expected Number=1,Type=Integer"
+            )
+
+    return metadata
+
+
+def _validate_reference(
+    reference_path: str | Path,
+    variants: tuple[Variant, ...],
+    errors: list[str],
+) -> None:
+    """Check every PON target REF allele against an optional reference FASTA."""
+    try:
+        with pysam.FastaFile(str(reference_path)) as reference_file:
+            reference_contigs = frozenset(reference_file.references)
+            for variant in variants:
+                if variant.contig not in reference_contigs:
+                    errors.append(
+                        f"Reference FASTA does not contain contig {variant.contig!r}"
+                    )
+                    continue
+                observed_ref = reference_file.fetch(
+                    variant.contig,
+                    variant.ref_pos0,
+                    variant.ref_pos0 + len(variant.ref),
+                ).upper()
+                if observed_ref != variant.ref:
+                    errors.append(
+                        "PON REF allele at "
+                        f"{variant.contig}:{variant.ref_pos0 + 1} is {variant.ref!r}, "
+                        f"but the reference FASTA contains {observed_ref!r}"
+                    )
+    except (OSError, ValueError) as exc:
+        errors.append(f"Could not read reference FASTA: {exc}")
+
+
+def _target_variants(path: str | Path) -> tuple[Variant, ...]:
+    """Read exactly the supported target alleles expected from a target VCF."""
+    variants: list[Variant] = []
+    seen_variants: set[Variant] = set()
+    with pysam.VariantFile(str(path)) as target_vcf:
+        for record in target_vcf:
+            variant = _variant_from_record(record, source_label="Target VCF")
+            if variant in seen_variants:
+                raise ValueError(
+                    "Target VCF contains duplicate target allele "
+                    f"{variant.contig}:{variant.ref_pos0 + 1} {variant.ref}>{variant.alt}"
+                )
+            seen_variants.add(variant)
+            variants.append(variant)
+    return tuple(variants)
+
+
+def validate_pon(
+    path: str | Path,
+    *,
+    reference_path: str | Path | None = None,
+    target_vcf_path: str | Path | None = None,
+) -> PonValidationResult:
+    """Validate a PON artifact and optional reference and target-VCF compatibility."""
+    try:
+        inspection = inspect_pon(path)
+    except (OSError, ValueError) as exc:
+        return PonValidationResult(inspection=None, errors=(str(exc),))
+
+    errors: list[str] = []
+    path_obj = Path(path)
+    variants: list[Variant] = []
+
+    if inspection.format != "BCF":
+        errors.append("PON artifact must be BCF")
+        return PonValidationResult(inspection=inspection, errors=tuple(errors))
+
+    _validate_index(path_obj, errors)
+    try:
+        with pysam.VariantFile(str(path_obj)) as pon_file:
+            metadata = _validate_header(pon_file.header, errors)
+            sample_names = () if metadata is None else metadata.sample_names
+            seen_variants: set[Variant] = set()
+            previous_location: tuple[int, int] | None = None
+            contig_order = {
+                contig: index for index, contig in enumerate(pon_file.header.contigs)
+            }
+
+            for record in pon_file:
+                location = (contig_order.get(record.contig, len(contig_order)), record.pos)
+                if previous_location is not None and location < previous_location:
+                    errors.append("PON artifact records are not coordinate-sorted")
+                previous_location = location
+
+                try:
+                    variant = _variant_from_record(record, source_label="PON artifact")
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
+
+                if variant in seen_variants:
+                    errors.append(
+                        "PON artifact contains duplicate evidence for "
+                        f"{variant.contig}:{variant.ref_pos0 + 1} {variant.ref}>{variant.alt}"
+                    )
+                seen_variants.add(variant)
+                variants.append(variant)
+
+                for sample_name in sample_names:
+                    try:
+                        _evidence_from_sample(
+                            record.samples[sample_name],
+                            sample_name=sample_name,
+                            variant=variant,
+                        )
+                    except (KeyError, TypeError, ValueError) as exc:
+                        errors.append(str(exc))
+
+    except (OSError, ValueError, pysam.SamtoolsError) as exc:
+        errors.append(f"Could not read PON artifact: {exc}")
+
+    if not variants:
+        errors.append("PON artifact must contain at least one target record")
+
+    variant_tuple = tuple(variants)
+    if reference_path is not None and variant_tuple:
+        _validate_reference(reference_path, variant_tuple, errors)
+
+    if target_vcf_path is not None:
+        try:
+            if variant_tuple != _target_variants(target_vcf_path):
+                errors.append("PON artifact targets do not match the supplied target VCF")
+        except (OSError, ValueError) as exc:
+            errors.append(f"Could not validate target VCF: {exc}")
+
+    return PonValidationResult(inspection=inspection, errors=tuple(errors))
 
 
 def _add_pon_header_fields(
@@ -283,22 +557,7 @@ def read_pon_evidence(
             raise ValueError("PON artifact must be BCF")
         metadata = _parse_metadata(pon_file.header)
         for record in pon_file:
-            alts = record.alts or ()
-            if len(alts) != 1:
-                raise ValueError(
-                    f"PON artifact contains a non-biallelic record at {record.contig}:{record.pos}"
-                )
-            try:
-                variant = Variant.from_vcf_fields(
-                    contig=record.contig,
-                    pos1=record.pos,
-                    ref=record.ref,
-                    alt=alts[0],
-                )
-            except ValueError as exc:
-                raise ValueError(
-                    f"PON artifact contains an unsupported allele at {record.contig}:{record.pos}"
-                ) from exc
+            variant = _variant_from_record(record, source_label="PON artifact")
 
             yield variant, tuple(
                 _evidence_from_sample(

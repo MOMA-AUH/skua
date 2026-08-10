@@ -8,6 +8,7 @@ from skua import (
     read_pon_evidence,
     read_pon_metadata,
 )
+from skua.pon import inspect_pon, validate_pon
 from tests.helpers import (
     FakeAlignmentFile,
     FakeAlignmentHeader,
@@ -114,6 +115,90 @@ def test_build_pon_indexes_bcf_so_opening_it_does_not_log_an_index_error(
 
     assert (tmp_path / "hotspots.pon.bcf.csi").exists()
     assert "Could not retrieve index file" not in capfd.readouterr().err
+
+
+def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    _write_targets(target_path)
+
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")])],
+        output_path=output_path,
+        min_baseq=25,
+        min_mapq=30,
+    )
+
+    inspection = inspect_pon(output_path)
+
+    assert inspection.format == "BCF"
+    assert inspection.index_present is True
+    assert inspection.metadata_record_count == 1
+    assert inspection.schema_version == "1"
+    assert inspection.evidence_policy_version == "1"
+    assert inspection.min_baseq == "25"
+    assert inspection.min_mapq == "30"
+    assert inspection.sample_names == ("N1",)
+
+
+def test_validate_pon_checks_records_and_requires_a_csi_index(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    _write_targets(target_path)
+
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")])],
+        output_path=output_path,
+    )
+
+    assert validate_pon(output_path).valid is True
+
+    (tmp_path / "hotspots.pon.bcf.csi").unlink()
+    result = validate_pon(output_path)
+
+    assert result.valid is False
+    assert result.inspection is not None
+    assert result.errors == ("PON artifact is missing its .csi index",)
+
+
+def test_validate_pon_optionally_checks_reference_and_target_vcf(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    reference_path = tmp_path / "reference.fa"
+    mismatched_targets = tmp_path / "different-targets.vcf"
+    _write_targets(target_path)
+    reference_path.write_text(">chr1\n" + "A" * 200 + "\n", encoding="utf-8")
+    pysam.faidx(str(reference_path))
+    mismatched_targets.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\ths1\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")])],
+        output_path=output_path,
+    )
+
+    assert validate_pon(
+        output_path,
+        reference_path=reference_path,
+        target_vcf_path=target_path,
+    ).valid is True
+
+    result = validate_pon(output_path, target_vcf_path=mismatched_targets)
+
+    assert result.valid is False
+    assert result.errors == ("PON artifact targets do not match the supplied target VCF",)
 
 
 def test_read_pon_metadata_rejects_vcf_artifacts(tmp_path) -> None:

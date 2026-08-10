@@ -94,7 +94,12 @@ Output INFO fields:
 
 By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
 
-### Precomputed PONs
+### `pon`
+
+Build reusable panel-of-normals artifacts, inspect their provenance, and
+validate them before annotation.
+
+#### `build`
 
 For a fixed target set, normal evidence can be collected once and reused across
 case samples:
@@ -128,6 +133,39 @@ only accesses the case alignment. Per-sample counts are retained so that
 `--truncate` and dispersion estimation are still evaluated at annotation time.
 Construction also writes a companion `.bcf.csi` index; target records must be
 coordinate-sorted.
+
+#### `inspect`
+
+Inspect a PON header without scanning every target record:
+
+```bash
+skua pon inspect hotspots.pon.bcf
+skua pon inspect hotspots.pon.bcf --json
+```
+
+`inspect` reports the artifact format, index presence, schema and evidence
+policy versions, quality thresholds, producer version, and normal samples. It
+is intentionally permissive: it can describe an incompatible artifact without
+claiming that the installed Skua can use it.
+
+#### `validate`
+
+Validate that a PON is structurally sound and compatible with the installed
+Skua version:
+
+```bash
+skua pon validate hotspots.pon.bcf
+skua pon validate hotspots.pon.bcf --reference reference.fa --targets hotspots.vcf.gz
+skua pon validate hotspots.pon.bcf --json
+```
+
+`validate` checks the BCF and CSI index, provenance metadata, required FORMAT
+fields, target alleles, duplicate targets, coordinate order, and per-sample
+evidence counts. `--reference` additionally checks every PON REF allele;
+`--targets` requires the supplied VCF to define exactly the PON targets. It
+returns exit status `0` when valid and `1` when any check fails.
+
+#### Using a PON with `annotate`
 
 When `--vcf` is omitted in cached mode, the PON records define the targets. When
 `--vcf` is supplied, its records define the output and their existing IDs,
