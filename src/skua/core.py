@@ -935,6 +935,31 @@ def _validate_unique_pon_targets(vcf_path: str | Path) -> None:
         raise ValueError("Target VCF must contain at least one supported variant")
 
 
+def _validate_coordinate_sorted_pon_targets(vcf_path: str | Path) -> None:
+    """Require PON targets to follow the VCF header's coordinate order."""
+    with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        contig_order = {
+            contig: index for index, contig in enumerate(source_vcf.header.contigs)
+        }
+        previous: tuple[tuple[int, int], str, int] | None = None
+        for record in source_vcf:
+            assessment = _assess_vcf_record(record)
+            if assessment.variant is None:
+                continue
+
+            location = (
+                contig_order.get(record.contig, len(contig_order)),
+                record.pos,
+            )
+            if previous is not None and location < previous[0]:
+                raise ValueError(
+                    "PON target VCF must be coordinate-sorted; "
+                    f"{record.contig}:{record.pos} follows "
+                    f"{previous[1]}:{previous[2]}"
+                )
+            previous = (location, record.contig, record.pos)
+
+
 def _collect_variant_batch(
     alignment_file: Any,
     variant_batch: tuple[Variant, ...],
@@ -1128,6 +1153,7 @@ def build_pon(
         fallback_artifact_probability=0.5,
     )
     _validate_unique_pon_targets(vcf_path)
+    _validate_coordinate_sorted_pon_targets(vcf_path)
     write_pon_artifact(
         vcf_path,
         output_path,

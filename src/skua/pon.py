@@ -514,6 +514,10 @@ def write_pon_artifact(
     try:
         bcftools.index("--force", str(output_path))
     except pysam.SamtoolsError as exc:
+        output_path_obj = Path(output_path)
+        if str(output_path) != "-":
+            output_path_obj.unlink(missing_ok=True)
+            Path(f"{output_path_obj}.csi").unlink(missing_ok=True)
         raise ValueError(
             "PON targets must be coordinate-sorted so the BCF can be indexed"
         ) from exc

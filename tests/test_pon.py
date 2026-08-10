@@ -201,6 +201,92 @@ def test_validate_pon_optionally_checks_reference_and_target_vcf(tmp_path) -> No
     assert result.errors == ("PON artifact targets do not match the supplied target VCF",)
 
 
+def test_validate_pon_accepts_a_fresh_coordinate_sorted_multicontig_artifact(tmp_path) -> None:
+    target_path = tmp_path / "multicontig-targets.vcf"
+    output_path = tmp_path / "multicontig.pon.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##contig=<ID=chr2>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+                "chr2\t106\t.\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    normal = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "N1-rg", "SM": "N1"}]),
+        references=("chr1", "chr2"),
+    )
+
+    build_pon(target_path, normal_alignments=[normal], output_path=output_path)
+
+    assert validate_pon(output_path).valid is True
+
+
+def test_build_pon_rejects_an_unsorted_target_vcf_before_writing_an_artifact(tmp_path) -> None:
+    target_path = tmp_path / "unsorted-targets.vcf"
+    output_path = tmp_path / "unsorted.pon.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t109\t.\tA\tT\t.\tPASS\t.",
+                "chr1\t106\t.\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    normal = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "N1-rg", "SM": "N1"}]),
+        references=("chr1",),
+    )
+
+    with pytest.raises(ValueError, match="coordinate-sorted"):
+        build_pon(target_path, normal_alignments=[normal], output_path=output_path)
+
+    assert not output_path.exists()
+
+
+def test_build_pon_rejects_target_records_out_of_header_contig_order(tmp_path) -> None:
+    target_path = tmp_path / "lexically-sorted-targets.vcf"
+    output_path = tmp_path / "lexically-sorted.pon.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                "##contig=<ID=chr2>",
+                "##contig=<ID=chr19>",
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr19\t33302346\t.\tA\tT\t.\tPASS\t.",
+                "chr2\t25234307\t.\tA\tC\t.\tPASS\t.",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    normal = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "N1-rg", "SM": "N1"}]),
+        references=("chr1", "chr2", "chr19"),
+    )
+
+    with pytest.raises(ValueError, match="coordinate-sorted"):
+        build_pon(target_path, normal_alignments=[normal], output_path=output_path)
+
+    assert not output_path.exists()
+
+
 def test_read_pon_metadata_rejects_vcf_artifacts(tmp_path) -> None:
     vcf_path = tmp_path / "not-a-pon.vcf"
     _write_targets(vcf_path)
