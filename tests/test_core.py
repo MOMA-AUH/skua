@@ -3,6 +3,10 @@ import json
 import pytest
 
 from skua.core import (
+    ANNOTATION_STATUS_INFO_FIELD_DEFINITION,
+    MODEL_SCORE_FORMAT_FIELD_DEFINITIONS,
+    PON_INFO_FIELD_DEFINITIONS,
+    READ_COUNT_FORMAT_FIELD_DEFINITIONS,
     AnnotationStatus,
     PonAnnotation,
     annotate_variant,
@@ -16,6 +20,7 @@ from skua.core import (
     write_annotation_results_json,
 )
 from skua.evidence import AggregatedEvidence, UnusableReason
+from skua.pon import PON_EVIDENCE_FORMAT_FIELDS
 from tests.helpers import FakeAlignmentFile, FakeAlignmentHeader, FakeRead, build_linear_pairs
 from skua.variants import Variant
 
@@ -532,6 +537,289 @@ def test_annotate_vcf_supports_uppercase_bgzipped_output(tmp_path) -> None:
         record = next(iter(annotated_vcf))
         sample = record.samples["CASE"]
         assert sample["SKUA_ALT_FWD"] == 1
+
+
+def test_annotate_vcf_does_not_clobber_an_existing_output_by_default(tmp_path) -> None:
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+    output_path.write_text("do not replace\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        annotate_vcf(alignment_file, vcf_path, output_path=output_path)
+
+    assert output_path.read_text(encoding="utf-8") == "do not replace\n"
+
+
+def test_annotate_vcf_force_atomically_replaces_an_existing_output(tmp_path) -> None:
+    import pysam
+
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+    output_path.write_text("replace me\n", encoding="utf-8")
+
+    annotate_vcf(alignment_file, vcf_path, output_path=output_path, force=True)
+
+    with pysam.VariantFile(str(output_path)) as annotated_vcf:
+        assert next(iter(annotated_vcf)).info["SKUA_STATUS"] == "ANNOTATED"
+
+
+def test_annotate_vcf_late_failure_does_not_publish_a_partial_output(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import skua.core as core
+
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+                "chr1\t107\t.\tA\tC\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "annotated.vcf"
+    original = core.annotate_variants_from_vcf
+
+    def stop_after_one(*args, **kwargs):
+        yield next(original(*args, **kwargs))
+
+    monkeypatch.setattr(core, "annotate_variants_from_vcf", stop_after_one)
+
+    with pytest.raises(RuntimeError, match="ended before"):
+        annotate_vcf(alignment_file, vcf_path, output_path=output_path)
+
+    assert not output_path.exists()
+    assert list(tmp_path.glob(".*annotated.vcf*")) == []
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="Old">'
+        for field_id, _description in READ_COUNT_FORMAT_FIELD_DEFINITIONS
+    ]
+    + [
+        f'##FORMAT=<ID={field_id},Number=1,Type={field_type},Description="Old">'
+        for field_id, field_type, _description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS
+    ]
+    + [
+        f'##INFO=<ID={field_id},Number=1,Type={field_type},Description="Old">'
+        for field_id, field_type, _description in PON_INFO_FIELD_DEFINITIONS
+    ]
+    + [
+        '##INFO=<ID={},Number=1,Type={},Description="Old">'.format(
+            ANNOTATION_STATUS_INFO_FIELD_DEFINITION[0],
+            ANNOTATION_STATUS_INFO_FIELD_DEFINITION[1],
+        )
+    ]
+    + [
+        f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="Old">'
+        for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS
+    ]
+    + [
+        "##SKUA_PON=<SchemaVersion=1,EvidencePolicyVersion=2,MinBaseQ=20,"
+        'MinMapQ=20,SkuaVersion="0.7.0">'
+    ]
+    + [
+        '##INFO=<ID=SKUA_LEGACY,Number=1,Type=Integer,Description="Legacy">',
+        '##FORMAT=<ID=SKUA_LEGACY_FMT,Number=1,Type=Integer,Description="Legacy">',
+    ],
+)
+def test_annotate_vcf_rejects_preannotated_input(definition, tmp_path) -> None:
+    alignment_file = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    vcf_path = tmp_path / "input.vcf"
+    vcf_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                definition,
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="already contains Skua annotations"):
+        annotate_vcf(alignment_file, vcf_path, output_path=tmp_path / "output.vcf")
+
+
+def test_annotate_vcf_force_replaces_stale_annotations_on_every_record_and_sample(
+    tmp_path,
+) -> None:
+    import pysam
+
+    from skua.core import _ensure_skua_vcf_header_fields
+
+    input_path = tmp_path / "preannotated.vcf"
+    output_path = tmp_path / "reannotated.vcf"
+    header = pysam.VariantHeader()
+    header.contigs.add("chr1")
+    header.add_line(
+        '##INFO=<ID=CALLER_SCORE,Number=1,Type=Integer,Description="Caller score">'
+    )
+    header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
+    _ensure_skua_vcf_header_fields(header, include_pon_info=True)
+    header.add_line(
+        '##INFO=<ID=SKUA_LEGACY,Number=1,Type=Integer,Description="Legacy">'
+    )
+    header.add_line(
+        '##FORMAT=<ID=SKUA_LEGACY_FMT,Number=1,Type=Integer,Description="Legacy">'
+    )
+    header.add_sample("CASE")
+    header.add_sample("CONTROL")
+
+    with pysam.VariantFile(str(input_path), "w", header=header) as preannotated:
+        for position, alts in ((106, ("T",)), (107, ("C", "G"))):
+            record = preannotated.new_record(
+                contig="chr1",
+                start=position - 1,
+                stop=position,
+                alleles=("A", *alts),
+            )
+            record.info["CALLER_SCORE"] = position
+            record.info["SKUA_STATUS"] = "ANNOTATED"
+            record.info["SKUA_LEGACY"] = 99
+            record.info["SKUA_ARTIFACT_PRIOR"] = tuple(0.2 for _alt in alts)
+            for field_id, field_type, _description in PON_INFO_FIELD_DEFINITIONS:
+                record.info[field_id] = 9.0 if field_type == "Float" else 99
+            for sample_name in ("CASE", "CONTROL"):
+                sample = record.samples[sample_name]
+                sample["GT"] = (0, 1)
+                sample["SKUA_LEGACY_FMT"] = 99
+                for field_id, _description in READ_COUNT_FORMAT_FIELD_DEFINITIONS:
+                    sample[field_id] = 99
+                for field_id, _field_type, _description in (
+                    MODEL_SCORE_FORMAT_FIELD_DEFINITIONS
+                ):
+                    sample[field_id] = 0.99
+            preannotated.write(record)
+
+    alignment = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+    annotate_vcf_with_normals(
+        alignment,
+        input_path,
+        normal_alignments=[],
+        output_path=output_path,
+        force=True,
+    )
+
+    with pysam.VariantFile(str(output_path)) as reannotated:
+        assert "SKUA_LEGACY" not in reannotated.header.info
+        assert "SKUA_LEGACY_FMT" not in reannotated.header.formats
+        records = list(reannotated)
+
+    supported, unsupported = records
+    assert supported.info["SKUA_STATUS"] == "ANNOTATED"
+    assert supported.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.2)
+    assert supported.info["CALLER_SCORE"] == 106
+    assert supported.samples["CASE"]["SKUA_ALT_FWD"] == 0
+    assert supported.samples["CASE"]["SKUA_USABLE"] == 0
+    assert supported.samples["CONTROL"]["SKUA_ALT_FWD"] is None
+    assert supported.samples["CONTROL"]["SKUA_ARTIFACT_POSTERIOR"] is None
+
+    assert unsupported.info["SKUA_STATUS"] == "UNSUPPORTED_MULTIALLELIC"
+    assert unsupported.info["SKUA_ARTIFACT_PRIOR"] == pytest.approx((0.2, 0.2))
+    assert unsupported.info["CALLER_SCORE"] == 107
+    assert all(
+        field_id not in unsupported.info
+        for field_id, *_rest in PON_INFO_FIELD_DEFINITIONS
+    )
+    assert all(
+        field_id not in unsupported.format
+        for field_id, _description in READ_COUNT_FORMAT_FIELD_DEFINITIONS
+    )
+    assert all(
+        field_id not in unsupported.format
+        for field_id, _field_type, _description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS
+    )
+
+
+def test_annotate_vcf_force_replaces_incompatible_owned_definition(tmp_path) -> None:
+    import pysam
+
+    input_path = tmp_path / "preannotated.vcf"
+    input_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=SKUA_STATUS,Number=2,Type=Integer,Description="Wrong">',
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "reannotated.vcf"
+    alignment = FakeAlignmentFile(
+        [],
+        header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+    )
+
+    annotate_vcf(alignment, input_path, output_path=output_path, force=True)
+
+    with pysam.VariantFile(str(output_path)) as reannotated:
+        status = reannotated.header.info["SKUA_STATUS"]
+        assert status.number == 1
+        assert status.type == "String"
+        assert next(iter(reannotated)).info["SKUA_STATUS"] == "ANNOTATED"
 
 
 @pytest.mark.parametrize("use_symlink", [False, True], ids=["same-path", "resolved-same-path"])

@@ -34,6 +34,7 @@ Key input parameters:
 - `--sample`: Case sample to annotate when VCF/BAM sample matching is ambiguous
 - `--reference`: Reference FASTA file, required when any input alignment is CRAM
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
+- `--force`: Replace an existing output and recompute existing Skua annotations
 
 Skua resolves a single case sample from the VCF sample names and alignment read-group `SM` tags. Use `--sample` when that resolution is ambiguous; it must name a VCF sample and an alignment sample. For a site-only VCF, skua adds the selected alignment sample as the sole output sample. The selected sample must have at least one read-group `ID` in the alignment header. In all cases, only reads whose `RG` tag names one of those read groups contribute case evidence. Untagged reads and reads from unknown or unassigned read groups are excluded.
 
@@ -99,6 +100,17 @@ Output INFO fields:
 
 By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
 
+File outputs are transactional and no-clobber by default. Skua writes a sibling
+temporary VCF and publishes it atomically only after annotation finishes;
+`--force` permits replacement of an existing output. Without `--force`, input
+VCFs that already define generated `SKUA_*` INFO or FORMAT annotations are
+rejected. With `--force`, Skua removes those definitions and all associated
+record and sample values before installing the canonical definitions and
+computing fresh annotations. Unsupported records therefore retain only their
+new `SKUA_STATUS` among generated Skua fields. `SKUA_ARTIFACT_PRIOR` is the
+exception: it is a validated input field whose effective value is intentionally
+preserved and written to the result. Non-Skua fields are preserved unchanged.
+
 ### `pon`
 
 Build reusable panel-of-normals artifacts, inspect their provenance, and
@@ -137,7 +149,11 @@ for every normal sample. During annotation, skua reads those cached counts and
 only accesses the case alignment. Per-sample counts are retained so that
 `--truncate` and dispersion estimation are still evaluated at annotation time.
 Construction also writes a companion `.bcf.csi` index; target records must be
-coordinate-sorted.
+coordinate-sorted. The BCF and CSI are built under sibling temporary names and
+published only after both are complete. Existing artifacts are not replaced by
+default; pass `--force` to `pon build` to replace an existing pair and remove
+pre-existing Skua annotations from its target records before rebuilding the
+PON. The target's validated `SKUA_ARTIFACT_PRIOR` is retained.
 
 #### `inspect`
 

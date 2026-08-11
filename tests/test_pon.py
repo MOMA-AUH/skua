@@ -164,6 +164,102 @@ def test_build_pon_indexes_bcf_so_opening_it_does_not_log_an_index_error(
     assert "Could not retrieve index file" not in capfd.readouterr().err
 
 
+def test_build_pon_does_not_clobber_an_existing_artifact_by_default(tmp_path) -> None:
+    target_path = tmp_path / "hotspots.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    _write_targets(target_path)
+    output_path.write_bytes(b"existing bcf")
+    index_path = tmp_path / "hotspots.pon.bcf.csi"
+    index_path.write_bytes(b"existing index")
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        build_pon(
+            target_path,
+            normal_alignments=[_normal("N1", [])],
+            output_path=output_path,
+        )
+
+    assert output_path.read_bytes() == b"existing bcf"
+    assert index_path.read_bytes() == b"existing index"
+
+
+def test_build_pon_force_strips_target_annotations_but_preserves_prior(tmp_path) -> None:
+    target_path = tmp_path / "preannotated.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    target_path.write_text(
+        "\n".join(
+            [
+                "##fileformat=VCFv4.2",
+                "##contig=<ID=chr1>",
+                '##INFO=<ID=CALLER_SCORE,Number=1,Type=Integer,Description="Caller score">',
+                '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior">',
+                '##INFO=<ID=SKUA_STATUS,Number=1,Type=String,Description="Old">',
+                '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                '##FORMAT=<ID=SKUA_ALT_FWD,Number=1,Type=Integer,Description="Old">',
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE",
+                "chr1\t106\ths1\tA\tT\t.\tPASS\t"
+                "CALLER_SCORE=7;SKUA_ARTIFACT_PRIOR=0.2;SKUA_STATUS=ANNOTATED\t"
+                "GT:SKUA_ALT_FWD\t0/1:99",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    build_pon(
+        target_path,
+        normal_alignments=[_normal("N1", [])],
+        output_path=output_path,
+        force=True,
+    )
+
+    with pysam.VariantFile(str(output_path)) as artifact:
+        assert "SKUA_STATUS" not in artifact.header.info
+        assert "SKUA_ALT_FWD" not in artifact.header.formats
+        record = next(iter(artifact))
+        assert record.info["CALLER_SCORE"] == 7
+        assert record.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.2)
+
+
+def test_build_pon_force_preserves_existing_pair_when_indexing_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import skua.pon as pon
+
+    target_path = tmp_path / "hotspots.vcf"
+    output_path = tmp_path / "hotspots.pon.bcf"
+    _write_targets(target_path)
+    normal = _normal("N1", [])
+    build_pon(
+        target_path,
+        normal_alignments=[normal],
+        output_path=output_path,
+    )
+    index_path = tmp_path / "hotspots.pon.bcf.csi"
+    old_bcf = output_path.read_bytes()
+    old_csi = index_path.read_bytes()
+
+    def fail_index(*args) -> None:
+        raise pysam.SamtoolsError("forced index failure")
+
+    monkeypatch.setattr(pon.bcftools, "index", fail_index)
+
+    with pytest.raises(ValueError, match="coordinate-sorted"):
+        build_pon(
+            target_path,
+            normal_alignments=[normal],
+            output_path=output_path,
+            min_baseq=20,
+            min_mapq=20,
+            force=True,
+        )
+
+    assert output_path.read_bytes() == old_bcf
+    assert index_path.read_bytes() == old_csi
+    assert list(tmp_path.glob(".*hotspots.pon.bcf*")) == []
+
+
 def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     output_path = tmp_path / "hotspots.pon.bcf"
@@ -410,11 +506,14 @@ def test_annotate_vcf_with_pon_counts_only_case_and_preserves_targets(tmp_path) 
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
         references=("chr1",),
     )
-    annotate_vcf_with_pon(case, pon_path, output_path=output_path)
+    output_path.write_text("replace me\n", encoding="utf-8")
+    annotate_vcf_with_pon(case, pon_path, output_path=output_path, force=True)
 
     assert normal.fetch_calls == []
     with pysam.VariantFile(str(output_path)) as calls:
         assert tuple(calls.header.samples) == ("CASE",)
+        assert "SKUA_PON_AF" not in calls.header.formats
+        assert not any(record.key == "SKUA_PON" for record in calls.header.records)
         record = next(iter(calls))
         assert record.id == "hs1"
         assert record.info["HOTSPOT"]

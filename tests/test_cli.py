@@ -315,6 +315,64 @@ def test_main_pon_build_opens_normals_and_writes_bcf(monkeypatch, tmp_path) -> N
     ]
 
 
+def test_main_forwards_force_for_annotation_and_pon_build(monkeypatch, tmp_path) -> None:
+    annotate_calls: list[dict[str, object]] = []
+    build_calls: list[dict[str, object]] = []
+
+    class FakeAlignmentFile:
+        def __init__(self, path: str, mode: str, **kwargs) -> None:
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr(cli.pysam, "AlignmentFile", FakeAlignmentFile)
+    monkeypatch.setattr(
+        cli,
+        "annotate_vcf_with_pon",
+        lambda *args, **kwargs: annotate_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_pon",
+        lambda *args, **kwargs: build_calls.append(kwargs),
+    )
+    normal_list = tmp_path / "normals.lst"
+    normal_list.write_text("normal.bam\n", encoding="utf-8")
+
+    assert cli.main(
+        [
+            "annotate",
+            "--alignment",
+            "case.bam",
+            "--pon",
+            "panel.bcf",
+            "--output",
+            "calls.vcf",
+            "--force",
+        ]
+    ) == 0
+    assert cli.main(
+        [
+            "pon",
+            "build",
+            "--vcf",
+            "targets.vcf",
+            "--normal-list",
+            str(normal_list),
+            "--output",
+            "panel.bcf",
+            "--force",
+        ]
+    ) == 0
+
+    assert annotate_calls[0]["force"] is True
+    assert build_calls[0]["force"] is True
+
+
 def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_path) -> None:
     calls: list[dict[str, object]] = []
 

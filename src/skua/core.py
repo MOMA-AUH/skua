@@ -15,12 +15,20 @@ from typing import TypeVar
 
 import pysam
 
+from ._output import (
+    cleanup_paths,
+    ensure_outputs_available,
+    publish_outputs,
+    sibling_temporary_path,
+)
 from .evidence import (
     AggregatedEvidence,
     collect_evidence_from_alignment,
     collect_evidence_from_alignment_batch,
 )
 from .pon import (
+    PON_EVIDENCE_FORMAT_FIELDS,
+    PON_HEADER_KEY,
     read_pon_evidence,
     read_pon_metadata,
     write_pon_artifact,
@@ -362,6 +370,165 @@ def _validate_artifact_prior_header(header: Any, *, add_if_missing: bool) -> boo
     return True
 
 
+def _validate_owned_field_definition(
+    fields: Any,
+    *,
+    field_id: str,
+    number: int | str,
+    field_type: str,
+    field_kind: str,
+) -> bool:
+    """Validate one existing Skua-owned header field definition."""
+    if field_id not in fields:
+        return False
+    field = fields[field_id]
+    if field.number != number or field.type != field_type:
+        raise ValueError(
+            f"Input VCF contains an incompatible {field_id} {field_kind} definition; "
+            f"expected Number={number},Type={field_type}"
+        )
+    return True
+
+
+def _validate_no_existing_skua_annotations(
+    header: Any,
+    *,
+    allow_pon_storage: bool,
+    replace_existing: bool,
+) -> None:
+    """Validate owned definitions and reject them unless replacement is explicit.
+
+    ``SKUA_ARTIFACT_PRIOR`` is an intentional input field, not a generated
+    annotation. PON storage metadata and FORMAT fields are allowed only when a
+    validated PON artifact itself supplies the target records.
+    """
+    _validate_artifact_prior_header(header, add_if_missing=False)
+    if replace_existing:
+        return
+
+    existing_annotations: list[str] = []
+
+    for field_id, _description in READ_COUNT_FORMAT_FIELD_DEFINITIONS:
+        if _validate_owned_field_definition(
+            header.formats,
+            field_id=field_id,
+            number=1,
+            field_type="Integer",
+            field_kind="FORMAT",
+        ):
+            existing_annotations.append(field_id)
+
+    for field_id, field_type, _description in MODEL_SCORE_FORMAT_FIELD_DEFINITIONS:
+        if _validate_owned_field_definition(
+            header.formats,
+            field_id=field_id,
+            number=1,
+            field_type=field_type,
+            field_kind="FORMAT",
+        ):
+            existing_annotations.append(field_id)
+
+    status_id, status_type, _description = ANNOTATION_STATUS_INFO_FIELD_DEFINITION
+    if _validate_owned_field_definition(
+        header.info,
+        field_id=status_id,
+        number=1,
+        field_type=status_type,
+        field_kind="INFO",
+    ):
+        existing_annotations.append(status_id)
+
+    for field_id, field_type, _description in PON_INFO_FIELD_DEFINITIONS:
+        if _validate_owned_field_definition(
+            header.info,
+            field_id=field_id,
+            number=1,
+            field_type=field_type,
+            field_kind="INFO",
+        ):
+            existing_annotations.append(field_id)
+
+    pon_storage_fields: list[str] = []
+    for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS:
+        if _validate_owned_field_definition(
+            header.formats,
+            field_id=field_id,
+            number=1,
+            field_type="Integer",
+            field_kind="FORMAT",
+        ):
+            pon_storage_fields.append(field_id)
+
+    has_pon_metadata = any(record.key == PON_HEADER_KEY for record in header.records)
+    if not allow_pon_storage:
+        existing_annotations.extend(pon_storage_fields)
+        if has_pon_metadata:
+            existing_annotations.append(PON_HEADER_KEY)
+
+    allowed_format_fields = (
+        {field_id for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS}
+        if allow_pon_storage
+        else set()
+    )
+    for field_id in header.info:
+        if (
+            field_id.startswith("SKUA_")
+            and field_id != ARTIFACT_PRIOR_INFO_FIELD_DEFINITION[0]
+            and field_id not in existing_annotations
+        ):
+            existing_annotations.append(field_id)
+    for field_id in header.formats:
+        if (
+            field_id.startswith("SKUA_")
+            and field_id not in allowed_format_fields
+            and field_id not in existing_annotations
+        ):
+            existing_annotations.append(field_id)
+    for record in header.records:
+        if (
+            record.key.startswith("SKUA_")
+            and not (allow_pon_storage and record.key == PON_HEADER_KEY)
+            and record.key not in existing_annotations
+        ):
+            existing_annotations.append(record.key)
+
+    if existing_annotations:
+        raise ValueError(
+            "Input VCF already contains Skua annotations: "
+            + ", ".join(existing_annotations)
+            + "; pass force=True or --force to replace them"
+        )
+
+
+def _copy_header_without_skua_annotations(header: Any) -> Any:
+    """Copy a VCF header while retaining only the Skua artifact-prior field."""
+    cleaned = header.copy()
+    prior_field_id = ARTIFACT_PRIOR_INFO_FIELD_DEFINITION[0]
+    for field_id in tuple(cleaned.info):
+        if field_id.startswith("SKUA_") and field_id != prior_field_id:
+            cleaned.info.remove_header(field_id)
+    for field_id in tuple(cleaned.formats):
+        if field_id.startswith("SKUA_"):
+            cleaned.formats.remove_header(field_id)
+    for record in tuple(cleaned.records):
+        if record.key.startswith("SKUA_"):
+            record.remove()
+    # A second copy rebuilds htslib's internal ID dictionary so definitions
+    # removed above can safely be added again under their canonical schema.
+    return cleaned.copy()
+
+
+def _strip_skua_record_annotations(record: Any) -> None:
+    """Remove generated Skua values from one record and every sample."""
+    prior_field_id = ARTIFACT_PRIOR_INFO_FIELD_DEFINITION[0]
+    for field_id in tuple(record.info):
+        if field_id.startswith("SKUA_") and field_id != prior_field_id:
+            del record.info[field_id]
+    for field_id in tuple(record.format):
+        if field_id.startswith("SKUA_"):
+            del record.format[field_id]
+
+
 def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> Any:
     """Ensure SKUA FORMAT/INFO definitions exist on the active VCF header."""
     annotated_header = header
@@ -520,7 +687,12 @@ def _assess_vcf_record(record: Any) -> VcfRecordAnnotation:
     return VcfRecordAnnotation(AnnotationStatus.ANNOTATED, variant)
 
 
-def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
+def _copy_vcf_record_with_sample(
+    record: Any,
+    out_vcf: Any,
+    *,
+    strip_skua_annotations: bool = False,
+) -> Any:
     """Copy a site-only VCF record into an output header that has one sample."""
     copied_record = out_vcf.new_record(
         contig=record.contig,
@@ -533,7 +705,25 @@ def _copy_vcf_record_with_sample(record: Any, out_vcf: Any) -> Any:
     for filter_id in record.filter.keys():
         copied_record.filter.add(filter_id)
     for key, value in record.info.items():
+        if (
+            strip_skua_annotations
+            and key.startswith("SKUA_")
+            and key != ARTIFACT_PRIOR_INFO_FIELD_DEFINITION[0]
+        ):
+            continue
         copied_record.info[key] = value
+    return copied_record
+
+
+def _copy_vcf_record_with_existing_samples(record: Any, out_vcf: Any) -> Any:
+    """Copy a sanitized record into a clean output header with the same samples."""
+    copied_record = _copy_vcf_record_with_sample(record, out_vcf)
+    for sample_name in record.samples:
+        source_sample = record.samples[sample_name]
+        copied_sample = copied_record.samples[sample_name]
+        for field_id in record.format:
+            copied_sample[field_id] = source_sample[field_id]
+        copied_sample.phased = source_sample.phased
     return copied_record
 
 
@@ -651,6 +841,7 @@ def _annotate_vcf_stream(
         [Any, Variant, CaseSampleSelection, AnnotationT],
         None,
     ],
+    force: bool,
 ) -> None:
     """Write an annotated VCF after caller-specific input preflight.
 
@@ -658,10 +849,29 @@ def _annotate_vcf_stream(
     case-sample resolution, status handling, and output.  Their distinct
     evidence calculations stay in their respective callers.
     """
+    output_is_stream = str(output_path) == "-"
+    final_output_path = None if output_is_stream else Path(output_path)
+    if final_output_path is not None:
+        ensure_outputs_available((final_output_path,), force=force)
+
     with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        _validate_no_existing_skua_annotations(
+            source_vcf.header,
+            allow_pon_storage=strip_input_samples,
+            replace_existing=force,
+        )
         if strip_input_samples:
             source_vcf.subset_samples([])
-        header = _ensure_skua_vcf_header_fields(source_vcf.header, include_pon_info=include_pon_info)
+        clean_input_annotations = force or strip_input_samples
+        output_header = (
+            _copy_header_without_skua_annotations(source_vcf.header)
+            if clean_input_annotations
+            else source_vcf.header
+        )
+        header = _ensure_skua_vcf_header_fields(
+            output_header,
+            include_pon_info=include_pon_info,
+        )
         case_selection = _resolve_case_sample(
             source_vcf.header,
             alignment_file,
@@ -673,43 +883,78 @@ def _annotate_vcf_stream(
             header.add_sample(site_only_sample_name)
         supported_annotations = build_supported_annotations(case_selection)
 
-        with pysam.VariantFile(
-            str(output_path),
-            _vcf_write_mode(output_path),
-            header=header,
-        ) as out_vcf:
-            for record in source_vcf:
-                if site_only_sample_name is not None:
-                    record = _copy_vcf_record_with_sample(record, out_vcf)
-                assessment = _assess_vcf_record(record)
-                record.info["SKUA_STATUS"] = assessment.status.value
-                if assessment.variant is not None:
-                    try:
-                        annotation_variant, annotation = next(supported_annotations)
-                    except StopIteration as exc:
-                        raise RuntimeError(
-                            "Evidence collection ended before the supported VCF records"
-                        ) from exc
-                    if annotation_variant != assessment.variant:
-                        raise RuntimeError(
-                            "Evidence collection returned variants out of VCF order"
-                        )
-                    annotate_supported_record(
-                        record,
-                        assessment.variant,
-                        case_selection,
-                        annotation,
-                    )
-                out_vcf.write(record)
+        temporary_output_path: Path | None = None
+        active_output_path: str | Path = output_path
+        if final_output_path is not None:
+            suffix = (
+                ".vcf.gz"
+                if str(final_output_path).lower().endswith(".vcf.gz")
+                else ".vcf"
+            )
+            temporary_output_path = sibling_temporary_path(
+                final_output_path,
+                suffix=suffix,
+            )
+            active_output_path = temporary_output_path
 
-            try:
-                next(supported_annotations)
-            except StopIteration:
-                pass
-            else:
-                raise RuntimeError(
-                    "Evidence collection returned more variants than the supported VCF records"
+        try:
+            with pysam.VariantFile(
+                str(active_output_path),
+                _vcf_write_mode(active_output_path),
+                header=header,
+            ) as out_vcf:
+                for record in source_vcf:
+                    if site_only_sample_name is not None:
+                        # ``subset_samples([])`` makes pysam's BCF FORMAT proxy
+                        # unsafe to enumerate. The copy below deliberately omits
+                        # FORMAT data, so sanitize generated INFO fields while
+                        # copying rather than mutating the source record.
+                        record = _copy_vcf_record_with_sample(
+                            record,
+                            out_vcf,
+                            strip_skua_annotations=force,
+                        )
+                    elif force:
+                        _strip_skua_record_annotations(record)
+                        record = _copy_vcf_record_with_existing_samples(record, out_vcf)
+                    assessment = _assess_vcf_record(record)
+                    record.info["SKUA_STATUS"] = assessment.status.value
+                    if assessment.variant is not None:
+                        try:
+                            annotation_variant, annotation = next(supported_annotations)
+                        except StopIteration as exc:
+                            raise RuntimeError(
+                                "Evidence collection ended before the supported VCF records"
+                            ) from exc
+                        if annotation_variant != assessment.variant:
+                            raise RuntimeError(
+                                "Evidence collection returned variants out of VCF order"
+                            )
+                        annotate_supported_record(
+                            record,
+                            assessment.variant,
+                            case_selection,
+                            annotation,
+                        )
+                    out_vcf.write(record)
+
+                try:
+                    next(supported_annotations)
+                except StopIteration:
+                    pass
+                else:
+                    raise RuntimeError(
+                        "Evidence collection returned more variants than the supported VCF records"
+                    )
+
+            if temporary_output_path is not None and final_output_path is not None:
+                publish_outputs(
+                    ((temporary_output_path, final_output_path),),
+                    force=force,
                 )
+        finally:
+            if temporary_output_path is not None:
+                cleanup_paths((temporary_output_path,))
 
 
 def annotate_vcf(
@@ -722,8 +967,9 @@ def annotate_vcf(
     strict: bool = False,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    force: bool = False,
 ) -> None:
-    """Annotate an input VCF with read-count FORMAT fields for variants."""
+    """Annotate a VCF, replacing existing Skua annotations when forced."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
     _validate_distinct_vcf_paths(vcf_path, output_path)
     _validate_vcf_against_inputs(
@@ -732,6 +978,11 @@ def annotate_vcf(
         reference_path=reference_path,
         strict=strict,
     )
+    if force:
+        _effective_artifact_priors_from_vcf(
+            vcf_path,
+            fallback_artifact_probability=0.5,
+        )
 
     def annotate_supported_record(
         record: Any,
@@ -766,6 +1017,7 @@ def annotate_vcf(
         strip_input_samples=False,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
+        force=force,
     )
 
 
@@ -783,8 +1035,9 @@ def annotate_vcf_with_normals(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    force: bool = False,
 ) -> None:
-    """Annotate an input VCF with read-count FORMAT and PON INFO fields."""
+    """Annotate a VCF with fresh read counts and PON model fields."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -850,6 +1103,7 @@ def annotate_vcf_with_normals(
         strip_input_samples=False,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
+        force=force,
     )
 
 
@@ -1123,12 +1377,24 @@ def build_pon(
     reference_path: str | Path | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
+    force: bool = False,
 ) -> None:
-    """Precompute per-normal evidence for every supported target into BCF."""
+    """Precompute normal evidence, replacing target annotations when forced."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
     if not normal_alignments:
         raise ValueError("normal_alignments must include at least one normal alignment")
     _validate_distinct_vcf_paths(vcf_path, output_path)
+    output_path_obj = Path(output_path)
+    ensure_outputs_available(
+        (output_path_obj, Path(f"{output_path_obj}.csi")),
+        force=force,
+    )
+    with pysam.VariantFile(str(vcf_path)) as source_vcf:
+        _validate_no_existing_skua_annotations(
+            source_vcf.header,
+            allow_pon_storage=False,
+            replace_existing=force,
+        )
 
     sample_names: list[str] = []
     for index, normal_alignment in enumerate(normal_alignments, start=1):
@@ -1166,6 +1432,7 @@ def build_pon(
         ),
         min_baseq=min_baseq,
         min_mapq=min_mapq,
+        force=force,
     )
 
 
@@ -1266,6 +1533,7 @@ def annotate_vcf_with_pon(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    force: bool = False,
 ) -> None:
     """Annotate VCF targets using cached PON evidence and fresh case evidence.
 
@@ -1353,6 +1621,7 @@ def annotate_vcf_with_pon(
         strip_input_samples=vcf_path is None,
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
+        force=force,
     )
 
 

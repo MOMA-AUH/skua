@@ -183,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     annotate_parser.add_argument("--reference", help="Reference FASTA path (required for CRAM)")
     annotate_parser.add_argument("--output", help="Optional output VCF path (.vcf or .vcf.gz)")
+    annotate_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing output and recompute existing Skua annotations",
+    )
     pon_source_group = annotate_parser.add_mutually_exclusive_group(required=True)
     pon_source_group.add_argument(
         "--normal-list",
@@ -225,6 +230,11 @@ def build_parser() -> argparse.ArgumentParser:
     pon_build_parser.add_argument(
         "--reference",
         help="Reference FASTA path (required for CRAM)",
+    )
+    pon_build_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing output pair and target Skua annotations",
     )
     _add_evidence_arguments(pon_build_parser, default=20)
 
@@ -301,6 +311,7 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     sample_name=args.sample,
                     reference_path=args.reference,
                     strict=args.strict,
+                    **({"force": True} if args.force else {}),
                     **_pon_model_kwargs(args),
                 )
             else:
@@ -322,9 +333,10 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     strict=args.strict,
                     min_baseq=min_baseq,
                     min_mapq=min_mapq,
+                    **({"force": True} if args.force else {}),
                     **_pon_model_kwargs(args),
                 )
-        except ValueError as exc:
+        except (FileExistsError, ValueError) as exc:
             parser.error(str(exc))
     return 0
 
@@ -350,8 +362,9 @@ def _run_pon_build(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
                 reference_path=args.reference,
                 min_baseq=args.min_baseq,
                 min_mapq=args.min_mapq,
+                **({"force": True} if args.force else {}),
             )
-        except ValueError as exc:
+        except (FileExistsError, ValueError) as exc:
             parser.error(str(exc))
     return 0
 

@@ -8,6 +8,12 @@ import pysam
 from pysam import bcftools
 
 from ._version import __version__
+from ._output import (
+    cleanup_paths,
+    ensure_outputs_available,
+    publish_outputs,
+    sibling_temporary_path,
+)
 from .evidence import AggregatedEvidence
 from .variants import Variant
 
@@ -15,6 +21,7 @@ from .variants import Variant
 PON_SCHEMA_VERSION = 1
 EVIDENCE_POLICY_VERSION = 2
 PON_HEADER_KEY = "SKUA_PON"
+_ARTIFACT_PRIOR_FIELD_ID = "SKUA_ARTIFACT_PRIOR"
 
 PON_EVIDENCE_FORMAT_FIELDS: tuple[tuple[str, str], ...] = (
     ("SKUA_PON_AF", "PON sample ALT-supporting forward reads"),
@@ -411,6 +418,37 @@ def _add_pon_header_fields(
 ) -> None:
     if any(record.key == PON_HEADER_KEY for record in header.records):
         raise ValueError("Target VCF already contains SKUA_PON metadata")
+    existing_pon_fields: list[str] = []
+    for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS:
+        if field_id not in header.formats:
+            continue
+        field = header.formats[field_id]
+        if field.number != 1 or field.type != "Integer":
+            raise ValueError(
+                f"Target VCF contains an incompatible {field_id} FORMAT definition; "
+                "expected Number=1,Type=Integer"
+            )
+        existing_pon_fields.append(field_id)
+    if existing_pon_fields:
+        raise ValueError(
+            "Target VCF already contains Skua PON annotations: "
+            + ", ".join(existing_pon_fields)
+        )
+    other_skua_fields = sorted(
+        {
+            field_id
+            for fields in (header.info, header.formats)
+            for field_id in fields
+            if field_id.startswith("SKUA_")
+            and field_id != _ARTIFACT_PRIOR_FIELD_ID
+        }
+    )
+    if other_skua_fields:
+        raise ValueError(
+            "Target VCF already contains Skua annotations: "
+            + ", ".join(other_skua_fields)
+        )
+
     header.add_meta(
         PON_HEADER_KEY,
         items=[
@@ -422,13 +460,6 @@ def _add_pon_header_fields(
         ],
     )
     for field_id, description in PON_EVIDENCE_FORMAT_FIELDS:
-        if field_id in header.formats:
-            field = header.formats[field_id]
-            if field.number != 1 or field.type != "Integer":
-                raise ValueError(
-                    f"Target VCF contains an incompatible {field_id} FORMAT definition"
-                )
-            continue
         definition = (
             f'##FORMAT=<ID={field_id},Number=1,Type=Integer,'
             f'Description="{description}">'
@@ -436,7 +467,27 @@ def _add_pon_header_fields(
         header.add_line(definition)
 
 
-def _copy_target_record(record: Any, output_file: Any) -> Any:
+def _copy_header_without_skua_annotations(header: Any) -> Any:
+    """Copy a target header while preserving only its Skua artifact prior."""
+    cleaned = header.copy()
+    for field_id in tuple(cleaned.info):
+        if field_id.startswith("SKUA_") and field_id != _ARTIFACT_PRIOR_FIELD_ID:
+            cleaned.info.remove_header(field_id)
+    for field_id in tuple(cleaned.formats):
+        if field_id.startswith("SKUA_"):
+            cleaned.formats.remove_header(field_id)
+    for record in tuple(cleaned.records):
+        if record.key.startswith("SKUA_"):
+            record.remove()
+    return cleaned.copy()
+
+
+def _copy_target_record(
+    record: Any,
+    output_file: Any,
+    *,
+    strip_skua_annotations: bool,
+) -> Any:
     copied = output_file.new_record(
         contig=record.contig,
         start=record.start,
@@ -448,6 +499,12 @@ def _copy_target_record(record: Any, output_file: Any) -> Any:
     for filter_id in record.filter.keys():
         copied.filter.add(filter_id)
     for key, value in record.info.items():
+        if (
+            strip_skua_annotations
+            and key.startswith("SKUA_")
+            and key != _ARTIFACT_PRIOR_FIELD_ID
+        ):
+            continue
         copied.info[key] = value
     return copied
 
@@ -460,6 +517,7 @@ def write_pon_artifact(
     evidence_records: Iterable[tuple[Variant, tuple[AggregatedEvidence, ...]]],
     min_baseq: int,
     min_mapq: int,
+    force: bool = False,
 ) -> None:
     """Write per-normal, per-allele evidence to an immutable BCF artifact."""
     if not sample_names:
@@ -467,60 +525,96 @@ def write_pon_artifact(
     if len(set(sample_names)) != len(sample_names):
         raise ValueError("PON normal sample names must be unique")
 
-    with pysam.VariantFile(str(target_vcf_path)) as target_vcf:
-        target_vcf.subset_samples([])
-        header = target_vcf.header.copy()
-        _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
-        for sample_name in sample_names:
-            header.add_sample(sample_name)
-
-        evidence_iterator = iter(evidence_records)
-        with pysam.VariantFile(str(output_path), "wb", header=header) as output_file:
-            for target_record in target_vcf:
-                try:
-                    variant, normal_evidences = next(evidence_iterator)
-                except StopIteration as exc:
-                    raise RuntimeError("PON evidence ended before the target VCF") from exc
-
-                record_variant = Variant.from_vcf_fields(
-                    contig=target_record.contig,
-                    pos1=target_record.pos,
-                    ref=target_record.ref,
-                    alt=target_record.alts[0],
-                )
-                if record_variant != variant:
-                    raise RuntimeError("PON evidence variants are out of target VCF order")
-                if len(normal_evidences) != len(sample_names):
-                    raise RuntimeError("PON evidence sample count does not match its header")
-
-                output_record = _copy_target_record(target_record, output_file)
-                for sample_name, evidence in zip(
-                    sample_names,
-                    normal_evidences,
-                    strict=True,
-                ):
-                    sample = output_record.samples[sample_name]
-                    for field_id, attribute in _EVIDENCE_ATTRIBUTES_BY_FIELD.items():
-                        sample[field_id] = getattr(evidence, attribute)
-                output_file.write(output_record)
-
-            try:
-                next(evidence_iterator)
-            except StopIteration:
-                pass
-            else:
-                raise RuntimeError("PON evidence contains more variants than the target VCF")
+    final_output_path = Path(output_path)
+    final_index_path = Path(f"{final_output_path}.csi")
+    ensure_outputs_available(
+        (final_output_path, final_index_path),
+        force=force,
+    )
+    temporary_output_path = sibling_temporary_path(final_output_path, suffix=".bcf")
+    temporary_index_path = Path(f"{temporary_output_path}.csi")
 
     try:
-        bcftools.index("--force", str(output_path))
-    except pysam.SamtoolsError as exc:
-        output_path_obj = Path(output_path)
-        if str(output_path) != "-":
-            output_path_obj.unlink(missing_ok=True)
-            Path(f"{output_path_obj}.csi").unlink(missing_ok=True)
-        raise ValueError(
-            "PON targets must be coordinate-sorted so the BCF can be indexed"
-        ) from exc
+        with pysam.VariantFile(str(target_vcf_path)) as target_vcf:
+            target_vcf.subset_samples([])
+            header = (
+                _copy_header_without_skua_annotations(target_vcf.header)
+                if force
+                else target_vcf.header.copy()
+            )
+            _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
+            for sample_name in sample_names:
+                header.add_sample(sample_name)
+
+            evidence_iterator = iter(evidence_records)
+            with pysam.VariantFile(
+                str(temporary_output_path),
+                "wb",
+                header=header,
+            ) as output_file:
+                for target_record in target_vcf:
+                    try:
+                        variant, normal_evidences = next(evidence_iterator)
+                    except StopIteration as exc:
+                        raise RuntimeError(
+                            "PON evidence ended before the target VCF"
+                        ) from exc
+
+                    record_variant = Variant.from_vcf_fields(
+                        contig=target_record.contig,
+                        pos1=target_record.pos,
+                        ref=target_record.ref,
+                        alt=target_record.alts[0],
+                    )
+                    if record_variant != variant:
+                        raise RuntimeError(
+                            "PON evidence variants are out of target VCF order"
+                        )
+                    if len(normal_evidences) != len(sample_names):
+                        raise RuntimeError(
+                            "PON evidence sample count does not match its header"
+                        )
+
+                    output_record = _copy_target_record(
+                        target_record,
+                        output_file,
+                        strip_skua_annotations=force,
+                    )
+                    for sample_name, evidence in zip(
+                        sample_names,
+                        normal_evidences,
+                        strict=True,
+                    ):
+                        sample = output_record.samples[sample_name]
+                        for field_id, attribute in _EVIDENCE_ATTRIBUTES_BY_FIELD.items():
+                            sample[field_id] = getattr(evidence, attribute)
+                    output_file.write(output_record)
+
+                try:
+                    next(evidence_iterator)
+                except StopIteration:
+                    pass
+                else:
+                    raise RuntimeError(
+                        "PON evidence contains more variants than the target VCF"
+                    )
+
+        try:
+            bcftools.index("--force", str(temporary_output_path))
+        except pysam.SamtoolsError as exc:
+            raise ValueError(
+                "PON targets must be coordinate-sorted so the BCF can be indexed"
+            ) from exc
+
+        publish_outputs(
+            (
+                (temporary_index_path, final_index_path),
+                (temporary_output_path, final_output_path),
+            ),
+            force=force,
+        )
+    finally:
+        cleanup_paths((temporary_output_path, temporary_index_path))
 
 
 def _evidence_from_sample(sample: Any, *, sample_name: str, variant: Variant) -> AggregatedEvidence:
