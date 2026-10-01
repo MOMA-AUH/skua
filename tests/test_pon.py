@@ -54,18 +54,18 @@ def _normal(sample_name: str, reads: list[FakeRead]) -> FakeAlignmentFile:
     )
 
 
-def _write_policy_one_pon(path) -> None:
-    """Write a structurally valid PON produced under evidence policy 1."""
+def _write_legacy_pon(path, policy_version: int) -> None:
+    """Write a structurally valid PON produced under an older evidence policy."""
     header = pysam.VariantHeader()
     header.contigs.add("chr1", length=1000)
     header.add_meta(
         "SKUA_PON",
         items=[
             ("SchemaVersion", "1"),
-            ("EvidencePolicyVersion", "1"),
+            ("EvidencePolicyVersion", str(policy_version)),
             ("MinBaseQ", "20"),
             ("MinMapQ", "20"),
-            ("SkuaVersion", "0.6.0"),
+            ("SkuaVersion", "0.6.0" if policy_version == 1 else "0.7.1"),
         ],
     )
     for field_id in (
@@ -119,7 +119,7 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
 
     metadata = read_pon_metadata(output_path)
     assert metadata.schema_version == 1
-    assert metadata.evidence_policy_version == 2
+    assert metadata.evidence_policy_version == 3
     assert metadata.min_baseq == 25
     assert metadata.min_mapq == 30
     assert metadata.sample_names == ("N1", "N2")
@@ -279,47 +279,50 @@ def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) 
     assert inspection.index_present is True
     assert inspection.metadata_record_count == 1
     assert inspection.schema_version == "1"
-    assert inspection.evidence_policy_version == "2"
+    assert inspection.evidence_policy_version == "3"
     assert inspection.min_baseq == "25"
     assert inspection.min_mapq == "30"
     assert inspection.sample_names == ("N1",)
 
 
-def test_policy_one_pon_can_be_inspected_but_not_read(tmp_path) -> None:
+@pytest.mark.parametrize("policy_version", [1, 2])
+def test_legacy_pon_can_be_inspected_but_not_read(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
-    _write_policy_one_pon(pon_path)
+    _write_legacy_pon(pon_path, policy_version)
 
     inspection = inspect_pon(pon_path)
 
-    assert inspection.evidence_policy_version == "1"
+    assert inspection.evidence_policy_version == str(policy_version)
     with pytest.raises(
         ValueError,
-        match="Unsupported PON evidence policy version 1; expected 2",
+        match=f"Unsupported PON evidence policy version {policy_version}; expected 3",
     ):
         read_pon_metadata(pon_path)
     with pytest.raises(
         ValueError,
-        match="Unsupported PON evidence policy version 1; expected 2",
+        match=f"Unsupported PON evidence policy version {policy_version}; expected 3",
     ):
         list(read_pon_evidence(pon_path))
 
 
-def test_validate_pon_rejects_policy_one_artifact(tmp_path) -> None:
+@pytest.mark.parametrize("policy_version", [1, 2])
+def test_validate_pon_rejects_legacy_artifact(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
-    _write_policy_one_pon(pon_path)
+    _write_legacy_pon(pon_path, policy_version)
 
     result = validate_pon(pon_path)
 
     assert result.valid is False
     assert result.errors == (
-        "Unsupported PON evidence policy version 1; expected 2",
+        f"Unsupported PON evidence policy version {policy_version}; expected 3",
     )
 
 
-def test_cached_annotation_rejects_policy_one_pon_before_output(tmp_path) -> None:
+@pytest.mark.parametrize("policy_version", [1, 2])
+def test_cached_annotation_rejects_legacy_pon_before_output(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
     output_path = tmp_path / "annotated.vcf"
-    _write_policy_one_pon(pon_path)
+    _write_legacy_pon(pon_path, policy_version)
     case = FakeAlignmentFile(
         [],
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
@@ -328,7 +331,7 @@ def test_cached_annotation_rejects_policy_one_pon_before_output(tmp_path) -> Non
 
     with pytest.raises(
         ValueError,
-        match="Unsupported PON evidence policy version 1; expected 2",
+        match=f"Unsupported PON evidence policy version {policy_version}; expected 3",
     ):
         annotate_vcf_with_pon(case, pon_path, output_path=output_path)
 
