@@ -1,4 +1,5 @@
 import skua.evidence as evidence_module
+import pytest
 from skua.evidence import (
     UnusableReason,
     collect_evidence_from_alignment,
@@ -6,6 +7,28 @@ from skua.evidence import (
 )
 from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 from skua.variants import Variant
+
+
+@pytest.mark.parametrize("query_name", [None, "*"])
+def test_unknown_fragment_identity_is_excluded_in_both_collectors(query_name) -> None:
+    reads = [
+        FakeRead(
+            mapping_quality=60, is_reverse=False, query_sequence=sequence,
+            query_qualities=[35] * 10, aligned_pairs=build_linear_pairs(10, 100),
+            query_name=query_name,
+        )
+        for sequence in ("AAAAATAAAA", "AAAAAAAAAA")
+    ]
+    alignment = FakeAlignmentFile(reads)
+    variant = Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")
+    single = collect_evidence_from_alignment(
+        alignment, contig="chr1", ref_pos0=105, ref_base="A", alt_base="T",
+    )
+    [batch] = collect_evidence_from_alignment_batch(alignment, [variant])
+    assert single == batch
+    assert single.usable == 0
+    assert single.unusable == 2
+    assert single.unusable_by_reason == {UnusableReason.MISSING_QUERY_NAME: 2}
 
 
 
