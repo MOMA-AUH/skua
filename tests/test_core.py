@@ -789,6 +789,67 @@ def test_annotate_vcf_force_replaces_stale_annotations_on_every_record_and_sampl
     )
 
 
+@pytest.mark.parametrize("input_format", ["vcf", "bcf"])
+@pytest.mark.parametrize(
+    ("alt", "case_gt", "control_gt"),
+    [
+        ("T", "0|1/1", ".|1/0"),
+        ("T,G", "0|1/2", "0/1|2"),
+        ("T", "0|1", "1/0"),
+        ("T", "./.", ".|."),
+        ("T", "1", "."),
+        ("T,G", ".|1/2|.", "0/.|2/1"),
+    ],
+)
+def test_forced_annotation_preserves_genotype_phase_encoding(
+    tmp_path, input_format, alt, case_gt, control_gt,
+) -> None:
+    import pysam
+
+    input_path = tmp_path / "input.vcf"
+    output_path = tmp_path / "output.vcf"
+    input_path.write_text(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1>\n"
+        '##INFO=<ID=SKUA_STATUS,Number=1,Type=String,Description="Old status">\n'
+        '##FORMAT=<ID=SKUA_OLD,Number=1,Type=Integer,Description="Old count">\n'
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">\n'
+        '##FORMAT=<ID=CALLER_NOTE,Number=1,Type=String,Description="Caller note">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tCONTROL\n"
+        f"chr1\t106\ths1\tA\t{alt}\t30\tPASS\tSKUA_STATUS=ANNOTATED\t"
+        f"GT:SKUA_OLD:DP:CALLER_NOTE\t{case_gt}:99:15:case-note\t"
+        f"{control_gt}:99:20:control-note\n"
+    )
+    if input_format == "bcf":
+        bcf_path = tmp_path / "input.bcf"
+        with pysam.VariantFile(str(input_path)) as source:
+            with pysam.VariantFile(str(bcf_path), "wb", header=source.header) as output:
+                for record in source:
+                    output.write(record)
+        input_path = bcf_path
+    alignment = FakeAlignmentFile(
+        [], header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
+        references=("chr1",),
+    )
+    annotate_vcf(alignment, input_path, output_path=output_path, force=True)
+
+    with pysam.VariantFile(str(output_path)) as output:
+        record = next(iter(output))
+        assert "SKUA_OLD" not in output.header.formats
+        assert "SKUA_OLD" not in record.format
+        expected_status = "UNSUPPORTED_MULTIALLELIC" if "," in alt else "ANNOTATED"
+        assert record.info["SKUA_STATUS"] == expected_status
+        columns = str(record).rstrip("\n").split("\t")
+        fields = columns[8].split(":")
+        for sample_name, values, gt, depth, note in (
+            ("CASE", columns[9], case_gt, 15, "case-note"),
+            ("CONTROL", columns[10], control_gt, 20, "control-note"),
+        ):
+            assert dict(zip(fields, values.split(":")))["GT"] == gt
+            assert record.samples[sample_name]["DP"] == depth
+            assert record.samples[sample_name]["CALLER_NOTE"] == note
+
+
 def test_annotate_vcf_force_replaces_incompatible_owned_definition(tmp_path) -> None:
     import pysam
 

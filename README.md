@@ -129,7 +129,10 @@ record and sample values before installing the canonical definitions and
 computing fresh annotations. Unsupported records therefore retain only their
 new `SKUA_STATUS` among generated Skua fields. `SKUA_ARTIFACT_PRIOR` is the
 exception: it is a validated input field whose effective value is intentionally
-preserved and written to the result. Non-Skua fields are preserved unchanged.
+preserved and written to the result. Non-Skua fields are preserved unchanged,
+including per-allele genotype phasing (such as `0|1/2`) and missing genotype
+alleles in both selected and unselected samples, even on retained unsupported
+records.
 
 ### `pon`
 

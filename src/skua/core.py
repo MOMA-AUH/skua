@@ -715,18 +715,6 @@ def _copy_vcf_record_with_sample(
     return copied_record
 
 
-def _copy_vcf_record_with_existing_samples(record: Any, out_vcf: Any) -> Any:
-    """Copy a sanitized record into a clean output header with the same samples."""
-    copied_record = _copy_vcf_record_with_sample(record, out_vcf)
-    for sample_name in record.samples:
-        source_sample = record.samples[sample_name]
-        copied_sample = copied_record.samples[sample_name]
-        for field_id in record.format:
-            copied_sample[field_id] = source_sample[field_id]
-        copied_sample.phased = source_sample.phased
-    return copied_record
-
-
 def _annotate_read_count_format_fields(
     record: Any,
     evidence: AggregatedEvidence,
@@ -921,7 +909,12 @@ def _annotate_vcf_stream(
                         )
                     elif force:
                         _strip_skua_record_annotations(record)
-                        record = _copy_vcf_record_with_existing_samples(record, out_vcf)
+                        # Copy after deletion so removed FORMAT entries are
+                        # compacted before translating and reusing their IDs.
+                        record = record.copy()
+                        # Translate the encoded FORMAT data intact: GT tuples
+                        # plus one phased boolean lose mixed per-allele phasing.
+                        record.translate(out_vcf.header)
                     assessment = _assess_vcf_record(record)
                     record.info["SKUA_STATUS"] = assessment.status.value
                     if assessment.variant is not None:
