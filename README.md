@@ -73,6 +73,14 @@ strand; one usable mate takes precedence over an unusable mate; conflicting
 usable mates count once as unusable; and two unusable mates count once as
 unusable.
 
+Records with unavailable query names (`*` in SAM/BAM/CRAM, or `None` in the
+Python alignment interface) cannot be assigned to fragments. Both singleton and
+batch alignment collectors exclude them from usable evidence and count each
+record as unusable with reason `missing_query_name`. These diagnostic counts
+are per record because the number of fragments is unknown; unnamed records are
+never merged together or treated as independent usable fragments. Named
+fragments remain scoped to their read group.
+
 MNV support requires consecutive aligned query bases across the entire reference
 interval. An internal insertion, deletion, or reference skip makes that read
 unusable for the simple MNV, regardless of the inserted bases' quality. Insertions
@@ -238,8 +246,10 @@ unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
 
-The current evidence policy is **version 3**, which excludes reads with internal
-insertions from simple-MNV evidence. PONs built under policies 1 or 2 are rejected
+The current evidence policy is **version 4**, which excludes records with
+unavailable query names from usable fragment evidence and retains version 3's
+exclusion of internal insertions from simple-MNV evidence. PONs built under
+policies 1, 2, or 3 are rejected
 by annotation and validation, but can still be inspected. Rebuild them from the
 original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
 to replace an existing PON). Changing the header version is not sufficient:

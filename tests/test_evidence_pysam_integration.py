@@ -71,6 +71,28 @@ def create_test_bam(tmp_path: Path, reads: list[pysam.AlignedSegment]) -> Path:
     return sorted_bam
 
 
+@pytest.mark.parametrize("sequences", [["AAAAATAAAA"] * 5, ["AAAAATAAAA", "AAAAAAAAAA"]])
+def test_missing_query_names_are_excluded_with_diagnostics(tmp_path, sequences) -> None:
+    reads = [
+        build_aligned_segment(
+            query_name="*", query_sequence=sequence, reference_start=100,
+            read_group="rg1",
+        )
+        for sequence in sequences
+    ]
+    bam_path = create_test_bam(tmp_path, reads)
+    variant = Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")
+    with pysam.AlignmentFile(bam_path, "rb") as alignment:
+        single = annotate_variant(alignment, variant)
+        [(_, batch)] = annotate_variants(alignment, [variant])
+    assert single == batch
+    assert single.usable == 0
+    assert single.unusable == len(sequences)
+    assert {reason.value: count for reason, count in single.unusable_by_reason.items()} == {
+        "missing_query_name": len(sequences),
+    }
+
+
 @pytest.mark.parametrize("is_reverse", [False, True], ids=["forward", "reverse"])
 @pytest.mark.parametrize("inserted_baseq", [40, 5], ids=["high-baseq", "low-baseq"])
 @pytest.mark.parametrize("batch", [False, True], ids=["singleton", "batch"])
@@ -466,6 +488,12 @@ def test_collect_evidence_from_alignment_counts_overlapping_mates_once(tmp_path:
             ref_base="A",
             alt_base="T",
         )
+        [batch] = collect_evidence_from_alignment_batch(
+            alignment_file,
+            [Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")],
+        )
+        assert counts == batch
+
 
     # The second mate is leftmost and fetched first, but the first mate defines
     # the fragment strand when both calls agree.
@@ -826,6 +854,12 @@ def test_collect_evidence_from_alignment_scopes_query_names_to_read_group(
             ref_base="A",
             alt_base="T",
         )
+        [batch] = collect_evidence_from_alignment_batch(
+            alignment_file,
+            [Variant.from_vcf_fields(contig="chr1", pos1=106, ref="A", alt="T")],
+        )
+        assert counts == batch
+
 
     assert counts.alt_forward == 1
     assert counts.non_alt_forward == 1

@@ -28,6 +28,7 @@ class UnusableReason(str, Enum):
     NO_BASE_AT_SITE = "no_base_at_site"
     INVALID_BASE = "invalid_base"
     CONFLICTING_MATES = "conflicting_mates"
+    MISSING_QUERY_NAME = "missing_query_name"
 
 
 class SamFlag(IntFlag):
@@ -73,16 +74,23 @@ def _read_group_id(read: Any) -> str | None:
     return str(read.get_tag("RG"))
 
 
+def _fragment_key(read: Any) -> tuple[str | None, str] | None:
+    """Return known fragment identity; SAM '*' and None both mean unavailable."""
+    query_name = getattr(read, "query_name", None)
+    if query_name is None or query_name == "*":
+        return None
+    return _read_group_id(read), query_name
+
+
 def _group_reads_by_fragment(reads: Iterable[Any]) -> Iterable[list[Any]]:
     """Group overlapping alignment records by read group and query name."""
     reads_by_fragment: dict[tuple[str | None, str], list[Any]] = {}
     unnamed_reads: list[Any] = []
     for read in reads:
-        query_name = getattr(read, "query_name", None)
-        if query_name is None:
+        fragment_key = _fragment_key(read)
+        if fragment_key is None:
             unnamed_reads.append(read)
             continue
-        fragment_key = (_read_group_id(read), query_name)
         reads_by_fragment.setdefault(fragment_key, []).append(read)
 
     yield from reads_by_fragment.values()
@@ -148,6 +156,12 @@ def _resolve_fragment_call(
     read_calls: list[tuple[Any, ReadAlleleCall]],
 ) -> ReadAlleleCall:
     """Resolve all overlapping mate calls into one fragment-level observation."""
+    if _fragment_key(read_calls[0][0]) is None:
+        return ReadAlleleCall(
+            support=AlleleSupport.UNUSABLE,
+            is_reverse=read_calls[0][1].is_reverse,
+            reason=UnusableReason.MISSING_QUERY_NAME,
+        )
     usable_read_calls = [
         read_call
         for read_call in read_calls
@@ -818,12 +832,10 @@ def collect_evidence_from_alignment_batch(
         if first_variant == after_last_variant:
             continue
 
-        query_name = getattr(read, "query_name", None)
-        if query_name is None:
-            fragment_key: Any = (None, unnamed_read_index)
+        fragment_key: Any = _fragment_key(read)
+        if fragment_key is None:
+            fragment_key = (None, unnamed_read_index)
             unnamed_read_index += 1
-        else:
-            fragment_key = (read_group_id, query_name)
 
         alignment_positions = (
             _alignment_positions(read) if read.mapping_quality >= min_mapq else None

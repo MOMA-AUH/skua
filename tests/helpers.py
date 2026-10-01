@@ -1,4 +1,8 @@
 from dataclasses import dataclass, field
+from itertools import count
+
+
+_read_names = count()
 
 
 @dataclass
@@ -18,7 +22,7 @@ class FakeRead:
     aligned_pairs: list[tuple[int | None, int | None]]
     reference_start: int | None = None
     cigartuples: tuple[tuple[int, int], ...] | None = None
-    query_name: str | None = None
+    query_name: str | None = field(default_factory=lambda: f"read-{next(_read_names)}")
     flag: int = 0x3
     tags: dict[str, str] = field(default_factory=dict)
 
