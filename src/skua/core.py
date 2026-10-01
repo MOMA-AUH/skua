@@ -33,7 +33,13 @@ from .pon import (
     read_pon_metadata,
     write_pon_artifact,
 )
-from .stats import aggregate_evidence, compute_stats, DEFAULT_TRUNCATE, truncated_normal_evidences
+from .stats import (
+    DEFAULT_TRUNCATE,
+    _validate_model_parameters,
+    aggregate_evidence,
+    compute_stats,
+    truncated_normal_evidences,
+)
 from .variants import Variant
 
 
@@ -272,15 +278,11 @@ def _validate_annotation_parameters(
         raise ValueError("min_baseq must be >= 0")
     if min_mapq is not None and min_mapq < 0:
         raise ValueError("min_mapq must be >= 0")
-    if truncate is not None and not 0.0 < truncate <= 1.0:
-        raise ValueError("truncate must be greater than 0 and no greater than 1")
-    if pseudocount is not None and pseudocount <= 0:
-        raise ValueError("pseudocount must be > 0")
-    if prior_artifact_probability is not None and (
-        not math.isfinite(prior_artifact_probability)
-        or not 0.0 < prior_artifact_probability < 1.0
-    ):
-        raise ValueError("prior_artifact_probability must be finite and between 0 and 1")
+    _validate_model_parameters(
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_artifact_probability=prior_artifact_probability,
+    )
 
 
 def _validate_alignment_indexes(alignment_files: list[tuple[str, Any]]) -> None:
@@ -1799,6 +1801,11 @@ def format_annotation_results_with_normals(
     prior_artifact_probability: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Convert PON annotation results to JSON/tabular-ready row dictionaries."""
+    _validate_model_parameters(
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_artifact_probability=prior_artifact_probability,
+    )
     rows: list[dict[str, Any]] = []
     for variant, pon_result in results:
         evidence = pon_result.case_evidence
