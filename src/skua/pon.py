@@ -1,6 +1,7 @@
 """Versioned storage for allele-targeted panel-of-normals evidence."""
 
 from dataclasses import dataclass
+from itertools import groupby, zip_longest
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -249,13 +250,31 @@ def _variant_from_record(record: Any, *, source_label: str) -> Variant:
 
 
 def _validate_index(path: Path, errors: list[str]) -> None:
-    """Require a readable CSI index for a PON artifact."""
+    """Compare indexed and sequential records at every distinct target start."""
     if not Path(f"{path}.csi").is_file():
         errors.append("PON artifact is missing its .csi index")
         return
     try:
-        with pysam.VariantFile(str(path)) as pon_file:
-            next(pon_file.fetch(), None)
+        with (
+            pysam.VariantFile(str(path)) as sequential_file,
+            pysam.VariantFile(str(path)) as indexed_file,
+        ):
+            for (contig, start), expected in groupby(
+                sequential_file, key=lambda record: (record.contig, record.start),
+            ):
+                # Region queries also return deletions starting before this site.
+                observed = (
+                    record for record in indexed_file.fetch(contig, start, start + 1)
+                    if record.start == start
+                )
+                if any(
+                    str(left) != str(right)
+                    for left, right in zip_longest(expected, observed)
+                ):
+                    errors.append(
+                        "PON artifact .csi index disagrees with sequential records at "
+                        f"{contig}:{start + 1}"
+                    )
     except (OSError, ValueError, pysam.SamtoolsError) as exc:
         errors.append(f"PON artifact has an unreadable .csi index: {exc}")
 
