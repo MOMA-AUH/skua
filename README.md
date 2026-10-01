@@ -198,6 +198,12 @@ evidence counts. `--reference` additionally checks every PON REF allele;
 `--targets` requires the supplied VCF to define exactly the PON targets. It
 returns exit status `0` when valid and `1` when any check fails.
 
+Index validation queries every distinct target start through the CSI index and
+compares the complete records starting there (including order and multiplicity)
+with a sequential BCF scan. Overlapping records that start earlier are excluded
+from that comparison. This checks retrieval at the panel's target sites; it does
+not prove cryptographic identity of the index or test every possible interval.
+
 #### Using a PON with `annotate`
 
 When `--vcf` is omitted in cached mode, the PON records define the targets. When

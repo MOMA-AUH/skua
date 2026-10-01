@@ -1,3 +1,5 @@
+import json
+
 import pysam
 import pytest
 from pysam import bcftools
@@ -10,6 +12,7 @@ from skua import (
     read_pon_metadata,
 )
 from skua.pon import inspect_pon, validate_pon
+from skua.cli import main
 from tests.helpers import (
     FakeAlignmentFile,
     FakeAlignmentHeader,
@@ -140,6 +143,45 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
         record = next(iter(artifact))
         assert record.id == "hs1"
         assert record.info["HOTSPOT"]
+
+
+@pytest.mark.parametrize("index_state", ["missing", "corrupt", "foreign"])
+@pytest.mark.parametrize("json_output", [False, True])
+def test_validate_pon_rejects_bad_indexes_in_api_and_cli(
+    tmp_path, capsys, index_state, json_output,
+) -> None:
+    target_path = tmp_path / "targets.vcf"
+    pon_path = tmp_path / "panel.bcf"
+    _write_targets(target_path)
+    build_pon(target_path, normal_alignments=[_normal("N1", [])], output_path=pon_path)
+    index_path = tmp_path / "panel.bcf.csi"
+    if index_state == "missing":
+        index_path.unlink()
+    elif index_state == "corrupt":
+        index_path.write_bytes(b"garbage index")
+    else:
+        # A readable index for the same contig, but a different genomic bin.
+        foreign_path = tmp_path / "foreign.bcf"
+        target_path.write_text(target_path.read_text().replace("\t106\t", "\t1000000\t"))
+        build_pon(
+            target_path, normal_alignments=[_normal("N1", [])], output_path=foreign_path,
+        )
+        index_path.write_bytes((tmp_path / "foreign.bcf.csi").read_bytes())
+
+    result = validate_pon(pon_path)
+    assert not result.valid
+    assert any("index" in error for error in result.errors)
+    args = ["pon", "validate", str(pon_path)]
+    if json_output:
+        args.append("--json")
+    assert main(args) == 1
+    output = capsys.readouterr().out
+    if json_output:
+        payload = json.loads(output)
+        assert payload["valid"] is False
+        assert payload["errors"] == list(result.errors)
+    else:
+        assert "index" in output
 
 
 def test_build_pon_indexes_bcf_so_opening_it_does_not_log_an_index_error(
@@ -407,7 +449,9 @@ def test_validate_pon_accepts_a_fresh_coordinate_sorted_multicontig_artifact(tmp
                 "##contig=<ID=chr1>",
                 "##contig=<ID=chr2>",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                "chr1\t104\t.\tAAAA\tA\t.\tPASS\t.",
                 "chr1\t106\t.\tA\tT\t.\tPASS\t.",
+                "chr1\t106\t.\tA\tG\t.\tPASS\t.",
                 "chr2\t106\t.\tA\tC\t.\tPASS\t.",
             ]
         )
