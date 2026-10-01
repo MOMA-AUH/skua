@@ -11,7 +11,12 @@ from skua import (
     read_pon_evidence,
     read_pon_metadata,
 )
-from skua.pon import inspect_pon, validate_pon
+from skua.pon import (
+    EVIDENCE_POLICY_VERSION,
+    PON_EVIDENCE_FORMAT_FIELDS,
+    inspect_pon,
+    validate_pon,
+)
 from skua.cli import main
 from tests.helpers import (
     FakeAlignmentFile,
@@ -143,6 +148,109 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
         record = next(iter(artifact))
         assert record.id == "hs1"
         assert record.info["HOTSPOT"]
+
+
+def _write_pon_with_count_schema(
+    path, *, field_type, number, counts, omit_alt_count=False,
+) -> None:
+    """Encode malformed external artifacts through real VCF/BCF parsing."""
+    vcf_path = path.with_suffix(".vcf")
+    fields = [field for field, _ in PON_EVIDENCE_FORMAT_FIELDS]
+    vcf_path.write_text(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1>\n"
+        f"##SKUA_PON=<SchemaVersion=1,EvidencePolicyVersion={EVIDENCE_POLICY_VERSION},"
+        'MinBaseQ=20,MinMapQ=20,SkuaVersion="0.7.1">\n'
+        + "".join(
+            f'##FORMAT=<ID={field},Number={number},Type={field_type},Description="Count">\n'
+            for field in fields
+        )
+        + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tN1\n"
+        + "chr1\t106\t.\tA\tT\t.\tPASS\t.\t"
+        + ":".join(fields[1:] if omit_alt_count else fields) + "\t" + counts + "\n"
+    )
+    with pysam.VariantFile(str(vcf_path)) as source:
+        with pysam.VariantFile(str(path), "wb", header=source.header) as output:
+            for record in source:
+                output.write(record)
+    bcftools.index("--force", str(path))
+
+
+def _assert_pon_annotation_rejected(pon_path, target_path, output_path, *, error) -> None:
+    """Both annotation modes must reject the artifact without publishing output."""
+    for source_path in (None, target_path):
+        for force in (False, True):
+            if force:
+                output_path.write_bytes(b"existing output")
+            with pytest.raises(ValueError, match=error):
+                annotate_vcf_with_pon(
+                    _normal("CASE", []), pon_path, vcf_path=source_path,
+                    output_path=output_path, force=force,
+                )
+            if force:
+                assert output_path.read_bytes() == b"existing output"
+                output_path.unlink()
+            else:
+                assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("field_type", "number", "counts"),
+    [
+        ("Float", "1", "0.9:0:10:0:10.9:0"),
+        ("String", "1", "0:0:10:0:10:0"),
+        ("Integer", "2", "0,0:0,0:10,0:0,0:10,0:0,0"),
+        ("Integer", ".", "0:0:10:0:10:0"),
+    ],
+)
+def test_all_pon_readers_reject_incompatible_count_schema(
+    tmp_path, field_type, number, counts,
+) -> None:
+    pon_path = tmp_path / "invalid.bcf"
+    target_path = tmp_path / "targets.vcf"
+    output_path = tmp_path / "output.vcf"
+    _write_targets(target_path)
+    _write_pon_with_count_schema(
+        pon_path, field_type=field_type, number=number, counts=counts,
+    )
+    result = validate_pon(pon_path)
+    assert not result.valid
+    assert any("Number=1,Type=Integer" in error for error in result.errors)
+    with pytest.raises(ValueError, match="Number=1,Type=Integer"):
+        read_pon_metadata(pon_path)
+    with pytest.raises(ValueError, match="Number=1,Type=Integer"):
+        list(read_pon_evidence(pon_path))
+    _assert_pon_annotation_rejected(
+        pon_path, target_path, output_path, error="Number=1,Type=Integer",
+    )
+
+
+@pytest.mark.parametrize(
+    ("counts", "error", "omit_alt_count"),
+    [
+        (".:0:10:0:10:0", "missing SKUA_PON_AF", False),
+        ("0:10:0:10:0", "missing SKUA_PON_AF", True),
+        ("-1:0:10:0:9:0", "negative SKUA_PON_AF", False),
+        ("0:0:10:0:11:0", "inconsistent usable counts", False),
+        ("0,1:0:10:0:10:0", "non-integer SKUA_PON_AF", False),
+    ],
+)
+def test_pon_readers_reject_invalid_counts_before_publishing(
+    tmp_path, counts, error, omit_alt_count,
+) -> None:
+    pon_path = tmp_path / "invalid.bcf"
+    target_path = tmp_path / "targets.vcf"
+    output_path = tmp_path / "output.vcf"
+    _write_targets(target_path)
+    _write_pon_with_count_schema(
+        pon_path, field_type="Integer", number="1", counts=counts,
+        omit_alt_count=omit_alt_count,
+    )
+    result = validate_pon(pon_path)
+    assert not result.valid
+    assert any(error in message for message in result.errors)
+    with pytest.raises(ValueError, match=error):
+        list(read_pon_evidence(pon_path))
+    _assert_pon_annotation_rejected(pon_path, target_path, output_path, error=error)
 
 
 @pytest.mark.parametrize("index_state", ["missing", "corrupt", "foreign"])
