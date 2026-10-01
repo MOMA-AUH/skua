@@ -1,9 +1,44 @@
 from pathlib import Path
 import json
+import pytest
 
 import skua.cli as cli
 from skua import __version__
 from skua.pon import PonInspection, PonValidationResult
+
+
+@pytest.mark.parametrize("source_option", ["--normal-list", "--pon"])
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [("pseudocount", value) for value in ("nan", "inf", "-inf", "0", "-1")]
+    + [(parameter, value) for parameter in ("truncate", "prior-artifact-probability")
+       for value in ("nan", "inf", "-inf", "0", "1.1")],
+)
+def test_invalid_model_parameters_fail_before_cli_output(
+    tmp_path, capsys, source_option, force, parameter, value,
+) -> None:
+    output_path = tmp_path / "output.vcf.gz"
+    protected_paths = [output_path, Path(f"{output_path}.tbi"), Path(f"{output_path}.csi")]
+    if force:
+        for path in protected_paths:
+            path.write_bytes(b"existing output or index")
+    args = [
+        "annotate", "--vcf", "not-opened.vcf", "--alignment", "not-opened.bam",
+        source_option, "not-opened-panel", "--output", str(output_path),
+        f"--{parameter}={value}",
+    ]
+    if force:
+        args.append("--force")
+    with pytest.raises(SystemExit) as error:
+        cli.main(args)
+    assert error.value.code == 2
+    assert f"--{parameter} must" in capsys.readouterr().err
+    for path in protected_paths:
+        if force:
+            assert path.read_bytes() == b"existing output or index"
+        else:
+            assert not path.exists()
 
 
 def test_main_version_prints_version_and_exits_successfully(capsys) -> None:

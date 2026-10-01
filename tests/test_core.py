@@ -1,4 +1,5 @@
 import json
+import skua
 
 import pytest
 
@@ -23,6 +24,23 @@ from skua.evidence import AggregatedEvidence, UnusableReason
 from skua.pon import PON_EVIDENCE_FORMAT_FIELDS
 from tests.helpers import FakeAlignmentFile, FakeAlignmentHeader, FakeRead, build_linear_pairs
 from skua.variants import Variant
+
+
+@pytest.mark.parametrize(
+    "api",
+    ["annotate_vcf_with_normals", "annotate_vcf_with_pon", "annotate_vcf_to_json_with_normals"],
+)
+@pytest.mark.parametrize("pseudocount", [float("nan"), float("inf"), -float("inf"), 0, -1])
+def test_annotation_apis_reject_invalid_model_before_io(tmp_path, api, pseudocount) -> None:
+    output_path = tmp_path / "existing-output"
+    output_path.write_bytes(b"keep existing output")
+    options = {} if api == "annotate_vcf_to_json_with_normals" else {"force": True}
+    with pytest.raises(ValueError, match="pseudocount must be finite and > 0"):
+        getattr(skua, api)(
+            FakeAlignmentFile([]), tmp_path / "not-opened-input",
+            output_path=output_path, pseudocount=pseudocount, **options,
+        )
+    assert output_path.read_bytes() == b"keep existing output"
 
 
 def test_annotate_variant_collects_evidence_for_single_variant() -> None:

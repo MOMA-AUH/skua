@@ -46,6 +46,19 @@ Other optional parameters:
 - `--prior-artifact-probability` (default `0.5`): Fallback artifact prior when the input record has no `SKUA_ARTIFACT_PRIOR`
 - `--strict`: Fail before writing output if any VCF record cannot be annotated
 
+Statistical parameters must be finite. `pseudocount` must be positive;
+`truncate` must be in `(0, 1]`; and `prior_artifact_probability` must be in
+`(0, 1)`. CLI annotation and the Python APIs reject invalid values before
+publishing output, including when replacing an existing file.
+
+The exported `compute_stats` API also requires `rho` in `(0, 1)` and
+`0 < mu_min <= mu_max < 1`. These checks apply even at zero depth or when
+per-sample evidence will replace the supplied `rho`. The statistical helpers
+`estimate_rho` and `truncated_normal_evidences` use the same `truncate` contract;
+their `pseudo` and `epsilon` parameters must be finite and positive, and
+dispersion bounds must satisfy `0 < rho_min <= rho_max < 1`. Existing internal
+numerical clipping remains in place for valid parameters.
+
 Supported biallelic records may provide an allele-specific artifact prior in
 INFO:
 

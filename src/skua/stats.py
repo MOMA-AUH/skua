@@ -17,6 +17,43 @@ _CHANNELS = (
 DEFAULT_TRUNCATE = 0.1
 
 
+def _validate_positive_finite(value: float, *, name: str) -> None:
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and > 0")
+
+
+def _validate_probability_bounds(
+    lower: float, upper: float, *, lower_name: str, upper_name: str,
+) -> None:
+    if not (
+        math.isfinite(lower) and math.isfinite(upper) and 0.0 < lower <= upper < 1.0
+    ):
+        raise ValueError(
+            f"{lower_name} and {upper_name} must be finite with "
+            f"0 < {lower_name} <= {upper_name} < 1"
+        )
+
+
+def _validate_model_parameters(
+    *,
+    truncate: float | None = None,
+    pseudocount: float | None = None,
+    prior_artifact_probability: float | None = None,
+) -> None:
+    """Share statistical parameter contracts between annotation and scoring."""
+    if truncate is not None and (
+        not math.isfinite(truncate) or not 0.0 < truncate <= 1.0
+    ):
+        raise ValueError("truncate must be greater than 0 and no greater than 1, and finite")
+    if pseudocount is not None:
+        _validate_positive_finite(pseudocount, name="pseudocount")
+    if prior_artifact_probability is not None and (
+        not math.isfinite(prior_artifact_probability)
+        or not 0.0 < prior_artifact_probability < 1.0
+    ):
+        raise ValueError("prior_artifact_probability must be finite and between 0 and 1")
+
+
 @dataclass(frozen=True)
 class Stats:
     """Typed strand-aware summary for case vs panel-of-normals background."""
@@ -51,6 +88,8 @@ def truncated_normal_evidences(
     epsilon: float = sys.float_info.epsilon,
 ) -> list[AggregatedEvidence]:
     """Return per-sample normal evidences retained by the truncation rule."""
+    _validate_model_parameters(truncate=truncate)
+    _validate_positive_finite(epsilon, name="epsilon")
     return [
         sample
         for sample in per_sample_evidences
@@ -106,6 +145,11 @@ def estimate_rho(
     alt and non-alt, each combined across strands for rho estimation.
     Returns the alt-channel rho bounded to [rho_min, rho_max].
     """
+    _validate_model_parameters(truncate=truncate)
+    _validate_positive_finite(pseudo, name="pseudo")
+    _validate_probability_bounds(
+        rho_min, rho_max, lower_name="rho_min", upper_name="rho_max",
+    )
     if len(per_sample_evidences) < 2:
         return rho_min
 
@@ -209,7 +253,20 @@ def compute_stats(
     When ``per_sample_evidences`` is supplied, rho is estimated from the
     per-sample PON evidence using the Shearwater method-of-moments estimator
     (``estimate_rho``), replacing the fixed ``rho`` default.
+
+    All parameters must be finite, with pseudocount > 0, 0 < truncate <= 1,
+    0 < rho < 1, 0 < prior_artifact_probability < 1, and
+    0 < mu_min <= mu_max < 1. Validation also applies at zero depth and before
+    replacing rho with a per-sample estimate.
     """
+    _validate_model_parameters(
+        truncate=truncate,
+        pseudocount=pseudocount,
+        prior_artifact_probability=prior_artifact_probability,
+    )
+    if not math.isfinite(rho) or not 0.0 < rho < 1.0:
+        raise ValueError("rho must be finite and between 0 and 1")
+    _validate_probability_bounds(mu_min, mu_max, lower_name="mu_min", upper_name="mu_max")
     if per_sample_evidences is not None:
         rho = estimate_rho(per_sample_evidences, truncate=truncate)
     case_counts = {

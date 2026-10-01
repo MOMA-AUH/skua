@@ -1,6 +1,84 @@
 from skua.evidence import AggregatedEvidence
-from skua.stats import Stats, compute_stats, estimate_rho
+from skua import compute_stats
+from skua.stats import Stats, estimate_rho, truncated_normal_evidences
 import sys
+import pytest
+
+
+@pytest.mark.parametrize("pseudocount", [float("nan"), float("inf"), -float("inf"), 0.0, -1.0])
+@pytest.mark.parametrize("depth", [0, 200])
+def test_compute_stats_rejects_invalid_pseudocount(pseudocount, depth) -> None:
+    case = _make_normal(10 if depth else 0, 10 if depth else 0, depth)
+    normal = _make_normal(0, 0, depth)
+    with pytest.raises(ValueError, match="pseudocount must be finite and > 0"):
+        compute_stats(case, normal, pseudocount=pseudocount)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "log_bayes_factor", "posterior"),
+    [
+        ({}, -14.294928638148122, 6.191431955750486e-7),
+        ({"pseudocount": 0.5}, -13.327051319298334, 1.629800490504908e-6),
+        ({"rho": 0.02, "pseudocount": 1, "truncate": 1, "prior_artifact_probability": 0.2},
+         -6.393538514971425, 0.00041790732073216204),
+    ],
+)
+def test_valid_parameters_preserve_numerical_results(parameters, log_bayes_factor, posterior) -> None:
+    # Values captured before parameter validation changed (base eca1d8c).
+    stats = compute_stats(_make_normal(10, 10, 200), _make_normal(0, 0, 200), **parameters)
+    assert stats.log_bayes_factor_artifact_vs_variant == pytest.approx(log_bayes_factor)
+    assert stats.artifact_posterior == pytest.approx(posterior)
+
+
+def test_statistical_parameter_boundaries_accept_equal_interior_limits() -> None:
+    empty = _make_normal(0, 0, 0)
+    stats = compute_stats(empty, empty, truncate=1, mu_min=0.5, mu_max=0.5)
+    assert stats.artifact_posterior == 0.5
+    assert estimate_rho([], rho_min=0.01, rho_max=0.01, truncate=1) == 0.01
+
+
+@pytest.mark.parametrize("parameter", ["rho", "mu_min", "mu_max", "prior_artifact_probability", "truncate"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), 0.0, -0.1, 1.1])
+@pytest.mark.parametrize("normals", [None, []])
+def test_compute_stats_rejects_invalid_probability_parameters(parameter, value, normals) -> None:
+    empty = _make_normal(0, 0, 0)
+    with pytest.raises(ValueError, match=parameter):
+        compute_stats(empty, empty, per_sample_evidences=normals, **{parameter: value})
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [{"rho": 1}, {"mu_min": 1}, {"mu_max": 1}, {"mu_min": 0.8, "mu_max": 0.2},
+     {"prior_artifact_probability": 1}],
+)
+def test_compute_stats_rejects_invalid_probability_bounds(parameters) -> None:
+    empty = _make_normal(0, 0, 0)
+    with pytest.raises(ValueError, match="rho|mu_min|mu_max|prior_artifact_probability"):
+        compute_stats(empty, empty, **parameters)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"pseudo": float("nan")}, {"pseudo": float("inf")}, {"pseudo": 0},
+        {"truncate": float("nan")}, {"truncate": 0}, {"truncate": 1.1},
+        {"rho_min": float("nan")}, {"rho_max": float("inf")},
+        {"rho_min": 0}, {"rho_max": 1}, {"rho_min": 0.2, "rho_max": 0.1},
+    ],
+)
+def test_estimate_rho_validates_parameters_even_without_samples(parameters) -> None:
+    with pytest.raises(ValueError, match="pseudo|truncate|rho_min|rho_max"):
+        estimate_rho([], **parameters)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [{"epsilon": float("nan")}, {"epsilon": float("inf")}, {"epsilon": 0},
+     {"truncate": float("nan")}, {"truncate": 0}, {"truncate": 1.1}],
+)
+def test_truncated_normals_validates_parameters_even_without_samples(parameters) -> None:
+    with pytest.raises(ValueError, match="epsilon|truncate"):
+        truncated_normal_evidences([], **parameters)
 
 
 def test_compute_stats_returns_typed_background_and_score() -> None:
