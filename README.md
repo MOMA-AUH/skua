@@ -73,6 +73,11 @@ strand; one usable mate takes precedence over an unusable mate; conflicting
 usable mates count once as unusable; and two unusable mates count once as
 unusable.
 
+MNV support requires consecutive aligned query bases across the entire reference
+interval. An internal insertion, deletion, or reference skip makes that read
+unusable for the simple MNV, regardless of the inserted bases' quality. Insertions
+outside the MNV interval do not affect this continuity check.
+
 Indel support requires an explicit CIGAR insertion or deletion immediately
 after the left anchor and an aligned base on the right. Soft clips, reference
 skips, terminal or adjacent complex events, and reads without sequence or base
@@ -219,6 +224,14 @@ construction rejects unsupported or multiallelic target records and requires a
 unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
+
+The current evidence policy is **version 3**, which excludes reads with internal
+insertions from simple-MNV evidence. PONs built under policies 1 or 2 are rejected
+by annotation and validation, but can still be inspected. Rebuild them from the
+original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
+to replace an existing PON). Changing the header version is not sufficient:
+cached counts must be recomputed under the new policy. The PON schema remains
+version 1.
 
 ## Python API
 

@@ -296,14 +296,18 @@ def _query_positions_for_ref_span(
     ref_span_len: int,
     ref_to_query: dict[int, int | None] | None = None,
 ) -> list[int] | None:
-    """Return query positions covering a contiguous reference span, if fully aligned."""
+    """Return consecutive query positions spanning every requested reference base."""
     if ref_to_query is None:
         ref_to_query = _ref_position_map(read)
     query_positions: list[int] = []
     for target_ref_pos in range(ref_pos0, ref_pos0 + ref_span_len):
-        if target_ref_pos not in ref_to_query or ref_to_query[target_ref_pos] is None:
+        query_pos = ref_to_query.get(target_ref_pos)
+        if query_pos is None:
             return None
-        query_positions.append(ref_to_query[target_ref_pos])
+        # An internal insertion is complex evidence, not a simple MNV allele.
+        if query_positions and query_pos != query_positions[-1] + 1:
+            return None
+        query_positions.append(query_pos)
     return query_positions
 
 

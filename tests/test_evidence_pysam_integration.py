@@ -3,7 +3,16 @@ from pathlib import Path
 import pysam
 import pytest
 
+from skua import (
+    annotate_variant,
+    annotate_variants,
+    annotate_vcf_with_normals,
+    annotate_vcf_with_pon,
+    build_pon,
+    read_pon_evidence,
+)
 from skua.evidence import (
+    AggregatedEvidence,
     UnusableReason,
     collect_evidence_from_alignment,
     collect_evidence_from_alignment_batch,
@@ -60,6 +69,176 @@ def create_test_bam(tmp_path: Path, reads: list[pysam.AlignedSegment]) -> Path:
     pysam.sort("-o", str(sorted_bam), str(unsorted_bam))
     pysam.index(str(sorted_bam))
     return sorted_bam
+
+
+@pytest.mark.parametrize("is_reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.parametrize("inserted_baseq", [40, 5], ids=["high-baseq", "low-baseq"])
+@pytest.mark.parametrize("batch", [False, True], ids=["singleton", "batch"])
+def test_mnv_internal_insertion_is_unusable_in_singleton_and_batch_apis(
+    tmp_path: Path, is_reverse: bool, inserted_baseq: int, batch: bool,
+) -> None:
+    reads = []
+    for index in range(5):
+        read = build_aligned_segment(
+            query_name=f"internal_insertion_{index}",
+            query_sequence="TGC",
+            reference_start=100,
+            is_reverse=is_reverse,
+            cigar=((0, 1), (1, 1), (0, 1)),  # 1M1I1M.
+        )
+        read.query_qualities = [40, inserted_baseq, 40]
+        reads.append(read)
+    bam_path = create_test_bam(tmp_path, reads)
+    variants = [
+        Variant(contig="chr1", ref_pos0=100, ref="AA", alt="TC"),
+        Variant(contig="chr1", ref_pos0=100, ref="AA", alt="GG"),
+    ]
+    expected = AggregatedEvidence(
+        alt_forward=0,
+        alt_reverse=0,
+        non_alt_forward=0,
+        non_alt_reverse=0,
+        usable=0,
+        unusable=5,
+        unusable_by_reason={UnusableReason.NO_BASE_AT_SITE: 5},
+    )
+
+    with pysam.AlignmentFile(bam_path, "rb") as alignment:
+        if batch:
+            assert list(annotate_variants(alignment, variants)) == [
+                (variants[0], expected), (variants[1], expected),
+            ]
+        else:
+            for variant in variants:
+                assert annotate_variant(alignment, variant) == expected
+
+
+@pytest.mark.parametrize(
+    ("sequence", "cigar"),
+    [
+        ("TC", ((0, 2),)),  # 2M.
+        ("TC", ((8, 1), (8, 1))),  # Consecutive X operations are aligned.
+        ("GTC", ((1, 1), (0, 2))),  # Insertion before the MNV interval.
+        ("TCG", ((0, 2), (1, 1))),  # Insertion after the MNV interval.
+        ("GTCG", ((4, 1), (0, 2), (4, 1))),  # Flanking soft clips.
+    ],
+)
+def test_contiguous_mnv_retains_strand_counts_in_singleton_and_batch_apis(
+    tmp_path: Path, sequence: str, cigar: tuple[tuple[int, int], ...],
+) -> None:
+    bam_path = create_test_bam(
+        tmp_path,
+        [
+            build_aligned_segment(
+                query_name=f"contiguous_{reverse}",
+                query_sequence=sequence,
+                reference_start=100,
+                is_reverse=reverse,
+                cigar=cigar,
+            )
+            for reverse in (False, True)
+        ],
+    )
+    variants = [
+        Variant(contig="chr1", ref_pos0=100, ref="AA", alt="TC"),
+        Variant(contig="chr1", ref_pos0=100, ref="AA", alt="GG"),
+    ]
+    expected = [
+        AggregatedEvidence(1, 1, 0, 0, 2, 0, {}),
+        AggregatedEvidence(0, 0, 1, 1, 2, 0, {}),
+    ]
+    with pysam.AlignmentFile(bam_path, "rb") as alignment:
+        assert [annotate_variant(alignment, variant) for variant in variants] == expected
+        assert list(annotate_variants(alignment, variants)) == list(zip(variants, expected))
+
+
+def test_mnv_direct_normals_and_cached_pon_agree_with_internal_insertions(
+    tmp_path: Path,
+) -> None:
+    bam_paths = []
+    for sample, sequence, count in (("case", "TC", 2), ("normal", "AA", 20)):
+        sample_path = tmp_path / sample
+        sample_path.mkdir()
+        reads = [
+            build_aligned_segment(
+                query_name=f"{sample}_aligned_{index}",
+                query_sequence=sequence,
+                reference_start=100,
+                is_reverse=bool(index % 2),
+                read_group="rg1",
+            )
+            for index in range(count)
+        ]
+        for reverse in (False, True):
+            for inserted_baseq in (40, 5):
+                read = build_aligned_segment(
+                    query_name=f"{sample}_complex_{reverse}_{inserted_baseq}",
+                    query_sequence="TGC",
+                    reference_start=100,
+                    is_reverse=reverse,
+                    cigar=((0, 1), (1, 1), (0, 1)),
+                    read_group="rg1",
+                )
+                read.query_qualities = [40, inserted_baseq, 40]
+                reads.append(read)
+        bam_paths.append(create_test_bam(sample_path, reads))
+
+    targets = tmp_path / "targets.vcf"
+    targets.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##contig=<ID=chr1,length=1000>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t101\t.\tAA\tTC\t.\tPASS\t.\n"
+        "chr1\t101\t.\tAA\tGG\t.\tPASS\t.\n",
+        encoding="utf-8",
+    )
+    pon_path = tmp_path / "normals.pon.bcf"
+    direct_output = tmp_path / "direct.vcf"
+    cached_output = tmp_path / "cached.vcf"
+    with (
+        pysam.AlignmentFile(bam_paths[0], "rb") as case,
+        pysam.AlignmentFile(bam_paths[1], "rb") as normal,
+    ):
+        annotate_vcf_with_normals(
+            case, targets, normal_alignments=[normal], output_path=direct_output,
+        )
+        build_pon(targets, normal_alignments=[normal], output_path=pon_path)
+        annotate_vcf_with_pon(case, pon_path, output_path=cached_output)
+
+    cached_evidence = list(read_pon_evidence(pon_path))
+    assert len(cached_evidence) == 2
+    for _variant, normal_evidences in cached_evidence:
+        assert normal_evidences == (AggregatedEvidence(0, 0, 10, 10, 20, 4, {}),)
+
+    with (
+        pysam.VariantFile(str(direct_output)) as direct_vcf,
+        pysam.VariantFile(str(cached_output)) as cached_vcf,
+    ):
+        direct_records = list(direct_vcf)
+        cached_records = list(cached_vcf)
+        assert len(direct_records) == len(cached_records) == 2
+        for direct, cached in zip(direct_records, cached_records, strict=True):
+            # Compare all evidence and model scores, then check literal counts
+            # so two equally incorrect workflows cannot satisfy this regression.
+            assert cached.alleles == direct.alleles
+            assert dict(cached.info) == dict(direct.info)
+            assert dict(cached.samples["sample"]) == dict(direct.samples["sample"])
+            assert direct.info["SKUA_PON_SAMPLE_COUNT"] == 1
+            assert direct.info["SKUA_PON_ALT_FWD"] == 0
+            assert direct.info["SKUA_PON_ALT_REV"] == 0
+            assert direct.info["SKUA_PON_NON_ALT_FWD"] == 10
+            assert direct.info["SKUA_PON_NON_ALT_REV"] == 10
+            assert direct.info["SKUA_PON_USABLE"] == 20
+            assert direct.info["SKUA_PON_UNUSABLE"] == 4
+            sample = direct.samples["sample"]
+            assert sample["SKUA_USABLE"] == 2
+            assert sample["SKUA_UNUSABLE"] == 4
+            if direct.alts == ("TC",):
+                assert sample["SKUA_ALT_FWD"] == sample["SKUA_ALT_REV"] == 1
+                assert sample["SKUA_NON_ALT_FWD"] == sample["SKUA_NON_ALT_REV"] == 0
+            else:
+                assert sample["SKUA_ALT_FWD"] == sample["SKUA_ALT_REV"] == 0
+                assert sample["SKUA_NON_ALT_FWD"] == sample["SKUA_NON_ALT_REV"] == 1
 
 
 
