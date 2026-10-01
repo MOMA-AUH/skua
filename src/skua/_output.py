@@ -47,15 +47,20 @@ def publish_outputs(
     replacements: Iterable[tuple[Path, Path]],
     *,
     force: bool,
+    removals: Iterable[Path] = (),
 ) -> None:
-    """Atomically publish completed sibling files, rolling back a failed pair.
+    """Atomically publish sibling files and retire obsolete companions.
 
     Each individual publication is atomic. For multiple related outputs, all
     temporary files must already be complete before publication begins, and a
-    failure during publication restores the previous set.
+    failure during publication restores the previous set. Obsolete companions
+    are removed before publishing replacements so they cannot index new data.
+    Existing entries, including removal targets, require ``force=True``.
     """
     pairs = tuple(replacements)
-    ensure_outputs_available((target for _temporary, target in pairs), force=force)
+    retired = tuple(removals)
+    targets = tuple(target for _temporary, target in pairs) + retired
+    ensure_outputs_available(targets, force=force)
 
     if not force:
         published: list[Path] = []
@@ -73,21 +78,26 @@ def publish_outputs(
         return
 
     backups: dict[Path, Path | None] = {}
-    published: list[Path] = []
+    changed: list[Path] = []
     try:
-        for _temporary, target in pairs:
+        for target in targets:
             if _lexists(target):
-                backup = _backup_path(target)
-                os.link(target, backup, follow_symlinks=False)
-                backups[target] = backup
+                backup_path = _backup_path(target)
+                os.link(target, backup_path, follow_symlinks=False)
+                backups[target] = backup_path
             else:
                 backups[target] = None
 
+        for target in retired:
+            if backups[target] is not None:
+                target.unlink()
+                changed.append(target)
+
         for temporary, target in pairs:
             os.replace(temporary, target)
-            published.append(target)
+            changed.append(target)
     except BaseException:
-        for target in reversed(published):
+        for target in reversed(changed):
             backup = backups.get(target)
             if backup is None:
                 target.unlink(missing_ok=True)

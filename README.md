@@ -102,8 +102,15 @@ By default, unsupported records do not stop the run. Use `--strict` to reject an
 
 File outputs are transactional and no-clobber by default. Skua writes a sibling
 temporary VCF and publishes it atomically only after annotation finishes;
-`--force` permits replacement of an existing output. Without `--force`, input
-VCFs that already define generated `SKUA_*` INFO or FORMAT annotations are
+`--force` permits replacement of an existing output. Existing `.tbi` and `.csi`
+companions also require `--force`, even if the output VCF itself is absent.
+Forced publication removes these indexes before replacing the VCF and restores
+the previous files if publication fails. Skua does not rebuild them or index
+new VCF outputs automatically; create a fresh index after annotation if you
+need regional access to compressed output.
+
+Without `--force`, input VCFs that already define generated `SKUA_*` INFO or
+FORMAT annotations are
 rejected. With `--force`, Skua removes those definitions and all associated
 record and sample values before installing the canonical definitions and
 computing fresh annotations. Unsupported records therefore retain only their
