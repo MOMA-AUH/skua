@@ -206,6 +206,14 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
     if missing_fields:
         raise ValueError("PON artifact is missing FORMAT fields: " + ", ".join(missing_fields))
 
+    for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS:
+        field = header.formats[field_id]
+        if field.number != 1 or field.type != "Integer":
+            raise ValueError(
+                f"PON artifact has an incompatible {field_id} FORMAT definition; "
+                "expected Number=1,Type=Integer"
+            )
+
     return PonArtifactMetadata(
         schema_version=schema_version,
         evidence_policy_version=evidence_policy_version,
@@ -289,14 +297,6 @@ def _validate_header(header: Any, errors: list[str]) -> PonArtifactMetadata | No
 
     if len(set(metadata.sample_names)) != len(metadata.sample_names):
         errors.append("PON artifact contains duplicate normal sample names")
-
-    for field_id, _description in PON_EVIDENCE_FORMAT_FIELDS:
-        field = header.formats[field_id]
-        if field.number != 1 or field.type != "Integer":
-            errors.append(
-                f"PON artifact has an incompatible {field_id} FORMAT definition; "
-                "expected Number=1,Type=Integer"
-            )
 
     return metadata
 
@@ -639,19 +639,23 @@ def write_pon_artifact(
 def _evidence_from_sample(sample: Any, *, sample_name: str, variant: Variant) -> AggregatedEvidence:
     values: dict[str, int] = {}
     for field_id, attribute in _EVIDENCE_ATTRIBUTES_BY_FIELD.items():
-        value = sample[field_id]
+        value = sample.get(field_id)
         if value is None:
             raise ValueError(
                 f"PON sample {sample_name!r} has missing {field_id} at "
                 f"{variant.contig}:{variant.ref_pos0 + 1}"
             )
-        integer_value = int(value)
-        if integer_value < 0:
+        if not isinstance(value, int):
+            raise ValueError(
+                f"PON sample {sample_name!r} has non-integer {field_id} at "
+                f"{variant.contig}:{variant.ref_pos0 + 1}; expected one Integer count"
+            )
+        if value < 0:
             raise ValueError(
                 f"PON sample {sample_name!r} has negative {field_id} at "
                 f"{variant.contig}:{variant.ref_pos0 + 1}"
             )
-        values[attribute] = integer_value
+        values[attribute] = value
 
     if values["usable"] != sum(
         values[key]

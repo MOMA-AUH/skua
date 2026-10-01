@@ -198,6 +198,13 @@ evidence counts. `--reference` additionally checks every PON REF allele;
 `--targets` requires the supplied VCF to define exactly the PON targets. It
 returns exit status `0` when valid and `1` when any check fails.
 
+All PON evidence readers, including both cached annotation modes, require the
+six count fields to declare `Number=1,Type=Integer`. Counts must be present,
+scalar, nonnegative integers, and usable totals must equal the four strand-aware
+ALT/non-ALT counts. Invalid counts are rejected without numeric coercion and
+before annotation publishes or replaces output. Header compatibility checks are
+shared with `validate` and do not require an additional full-panel scan.
+
 Index validation queries every distinct target start through the CSI index and
 compares the complete records starting there (including order and multiplicity)
 with a sequential BCF scan. Overlapping records that start earlier are excluded
