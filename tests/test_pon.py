@@ -175,6 +175,24 @@ def _write_pon_with_count_schema(
     bcftools.index("--force", str(path))
 
 
+def _assert_pon_annotation_rejected(pon_path, target_path, output_path, *, error) -> None:
+    """Both annotation modes must reject the artifact without publishing output."""
+    for source_path in (None, target_path):
+        for force in (False, True):
+            if force:
+                output_path.write_bytes(b"existing output")
+            with pytest.raises(ValueError, match=error):
+                annotate_vcf_with_pon(
+                    _normal("CASE", []), pon_path, vcf_path=source_path,
+                    output_path=output_path, force=force,
+                )
+            if force:
+                assert output_path.read_bytes() == b"existing output"
+                output_path.unlink()
+            else:
+                assert not output_path.exists()
+
+
 @pytest.mark.parametrize(
     ("field_type", "number", "counts"),
     [
@@ -201,21 +219,9 @@ def test_all_pon_readers_reject_incompatible_count_schema(
         read_pon_metadata(pon_path)
     with pytest.raises(ValueError, match="Number=1,Type=Integer"):
         list(read_pon_evidence(pon_path))
-    case = _normal("CASE", [])
-    for source_path in (None, target_path):
-        for force in (False, True):
-            if force:
-                output_path.write_bytes(b"existing output")
-            with pytest.raises(ValueError, match="Number=1,Type=Integer"):
-                annotate_vcf_with_pon(
-                    case, pon_path, vcf_path=source_path, output_path=output_path,
-                    force=force,
-                )
-            if force:
-                assert output_path.read_bytes() == b"existing output"
-                output_path.unlink()
-            else:
-                assert not output_path.exists()
+    _assert_pon_annotation_rejected(
+        pon_path, target_path, output_path, error="Number=1,Type=Integer",
+    )
 
 
 @pytest.mark.parametrize(
@@ -244,20 +250,7 @@ def test_pon_readers_reject_invalid_counts_before_publishing(
     assert any(error in message for message in result.errors)
     with pytest.raises(ValueError, match=error):
         list(read_pon_evidence(pon_path))
-    for source_path in (None, target_path):
-        for force in (False, True):
-            if force:
-                output_path.write_bytes(b"existing output")
-            with pytest.raises(ValueError, match=error):
-                annotate_vcf_with_pon(
-                    _normal("CASE", []), pon_path, vcf_path=source_path,
-                    output_path=output_path, force=force,
-                )
-            if force:
-                assert output_path.read_bytes() == b"existing output"
-                output_path.unlink()
-            else:
-                assert not output_path.exists()
+    _assert_pon_annotation_rejected(pon_path, target_path, output_path, error=error)
 
 
 @pytest.mark.parametrize("index_state", ["missing", "corrupt", "foreign"])
