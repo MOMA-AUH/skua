@@ -851,8 +851,13 @@ def _annotate_vcf_stream(
     """
     output_is_stream = str(output_path) == "-"
     final_output_path = None if output_is_stream else Path(output_path)
+    output_index_paths: tuple[Path, ...] = ()
     if final_output_path is not None:
-        ensure_outputs_available((final_output_path,), force=force)
+        output_index_paths = (
+            Path(f"{final_output_path}.tbi"),
+            Path(f"{final_output_path}.csi"),
+        )
+        ensure_outputs_available((final_output_path, *output_index_paths), force=force)
 
     with pysam.VariantFile(str(vcf_path)) as source_vcf:
         _validate_no_existing_skua_annotations(
@@ -951,6 +956,7 @@ def _annotate_vcf_stream(
                 publish_outputs(
                     ((temporary_output_path, final_output_path),),
                     force=force,
+                    removals=output_index_paths,
                 )
         finally:
             if temporary_output_path is not None:
