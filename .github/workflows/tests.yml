@@ -5,6 +5,11 @@ on:
     branches:
       - master
   pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   pytest:
@@ -13,6 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        pysam: ["current"]
+        include:
+          - python-version: "3.11"
+            pysam: "0.22.0"
 
     steps:
       - name: Check out repository
@@ -28,6 +37,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .[dev]
+
+      - name: Install minimum supported pysam
+        if: matrix.pysam != 'current'
+        env:
+          PYSAM_VERSION: ${{ matrix.pysam }}
+        run: python -m pip install "pysam==$PYSAM_VERSION"
 
       - name: Run tests
         run: pytest

@@ -5,11 +5,20 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
+  validate-source:
+    name: Validate Exact Revision
+    uses: ./.github/workflows/tests.yml
+
   build-and-test:
     name: Build And Test Conda Package
     runs-on: ubuntu-latest
+    needs: validate-source
 
     env:
       CHANNEL: MOMA-AUH
@@ -32,6 +41,18 @@ jobs:
         shell: bash -l {0}
         run: |
           conda install -y -c conda-forge conda-build
+
+      - name: Check source recipe and release tag versions
+        shell: bash -l {0}
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" == tag ]]; then
+            python scripts/check_release_version.py --tag "$REF_NAME"
+          else
+            python scripts/check_release_version.py
+          fi
 
       - name: Verify conda-build availability
         shell: bash -l {0}
@@ -60,7 +81,7 @@ jobs:
           fi
           echo "pkg_path=${PKG_PATH}" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test built package
+      - name: Functionally test installed package
         shell: bash -l {0}
         run: |
           conda-build --test "${{ steps.locate.outputs.pkg_path }}"

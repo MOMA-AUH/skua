@@ -401,6 +401,23 @@ workflow.
 - Python ≥ 3.11
 - pysam ≥ 0.22
 
+## Release validation
+
+Pull requests and manual runs of **Publish Conda Package** validate the source
+and build and exercise the Conda package without publishing. The source suite
+runs on Python 3.11–3.14 with current pysam, and on Python 3.11 with the minimum
+supported pysam 0.22.0. Tag publication uses the same tests on the exact tagged
+revision and rejects disagreements between the tag, source, and recipe versions.
+
+The installed-package check verifies the distribution and CLI versions, then
+generates real indexed BAM and reference-backed CRAM fixtures. It exercises PON
+build/validate and direct-normal, PON-only, and separate-VCF cached annotation,
+checking known fragment counts and identical evidence and scores. It runs with
+isolated Python imports and rejects a package loaded from the source checkout.
+Upload requires every validation job to pass and retains the `conda` environment
+approval controls. Only a tag run can upload; this workflow does not create tags
+or GitHub releases.
+
 ## License
 
 MIT. See [LICENSE](LICENSE) for details.
