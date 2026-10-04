@@ -19,7 +19,7 @@ from ._output import (
 from .evidence import AggregatedEvidence
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, read_reference_header, write_reference_header
-from .provenance import read_provenance_header, write_provenance_header
+from .provenance import evidence_provenance, read_provenance_header, write_provenance_header
 
 
 PON_SCHEMA_VERSION = 2
@@ -239,14 +239,26 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         expected = {
             "mode": "pon_build", "skua_version": items["SkuaVersion"],
             "normal_samples": list(sample_names), "reference": reference_identity.as_dict(),
-            "evidence": {
-                "policy_version": evidence_policy_version, "min_baseq": min_baseq, "min_mapq": min_mapq,
-                "mapq_255": "exclude", "normal_read_groups": "assigned_to_sample",
-            },
+            "evidence": evidence_provenance(evidence_policy_version, min_baseq, min_mapq),
         }
         for key, value in expected.items():
             if provenance.get(key) != value:
                 raise ValueError(f"PON provenance {key} contradicts its artifact metadata")
+        selections = provenance.get("normal_selections")
+        if selections is not None:
+            if not isinstance(selections, list) or len(selections) != len(sample_names):
+                raise ValueError("PON provenance normal selections do not match sample membership")
+            for sample, selection in zip(sample_names, selections, strict=True):
+                if not isinstance(selection, dict):
+                    raise ValueError("Invalid PON provenance normal selection")
+                groups = selection.get("read_group_ids")
+                if (
+                    selection.get("sample_name") != sample or selection.get("selection") != "read_groups"
+                    or not isinstance(groups, list) or not groups
+                    or not all(isinstance(group, str) and group for group in groups)
+                    or len(set(groups)) != len(groups)
+                ):
+                    raise ValueError("PON provenance normal selection contradicts its evidence policy")
     return PonArtifactMetadata(
         schema_version=schema_version,
         evidence_policy_version=evidence_policy_version,

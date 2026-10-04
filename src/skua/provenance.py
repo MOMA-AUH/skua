@@ -16,6 +16,17 @@ from ._headers import remove_header_records
 PROVENANCE_HEADER_KEY = "SKUA_PROVENANCE"
 
 
+def evidence_provenance(
+    policy_version: int, min_baseq: int, min_mapq: int, *,
+    normal_read_groups: str = "assigned_to_sample",
+) -> dict[str, Any]:
+    """Keep serialization and artifact validation on one evidence-policy description."""
+    return {
+        "policy_version": policy_version, "min_baseq": min_baseq, "min_mapq": min_mapq,
+        "mapq_255": "exclude", "normal_read_groups": normal_read_groups,
+    }
+
+
 def input_identity(path: str | bytes | Path | None) -> dict[str, Any]:
     """Hash local file bytes in bounded memory; explicitly label unavailable identity."""
     identity: dict[str, Any] = {

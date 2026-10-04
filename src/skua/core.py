@@ -47,7 +47,7 @@ from .stats import (
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, write_reference_header
 from ._version import __version__
-from .provenance import PROVENANCE_HEADER_KEY, input_identity, write_provenance_header
+from .provenance import PROVENANCE_HEADER_KEY, evidence_provenance, input_identity, write_provenance_header
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -951,16 +951,26 @@ def _run_provenance(
     force: bool = False,
 ) -> dict[str, Any]:
     """Capture actual inputs and effective policy, independent of output encoding."""
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
+    normal_samples = [next(iter(_alignment_sample_names(normal)), None) for normal in normal_alignments]
+    normal_selections = [
+        {
+            "sample_name": sample, "selection": "all_alignment_reads" if groups is None else "read_groups",
+            "read_group_ids": None if groups is None else sorted(groups),
+        }
+        for sample, groups in zip(normal_samples, normal_read_groups, strict=True)
+    ]
     return {
         "schema_version": 1, "skua_version": __version__, "mode": mode,
-        "evidence": {
-            "policy_version": EVIDENCE_POLICY_VERSION, "min_baseq": min_baseq, "min_mapq": min_mapq,
-            "mapq_255": "exclude", "normal_read_groups": "assigned_to_sample",
-        },
+        "evidence": evidence_provenance(
+            EVIDENCE_POLICY_VERSION, min_baseq, min_mapq,
+            normal_read_groups="per_normal_selection" if None in normal_read_groups else "assigned_to_sample",
+        ),
         "model": model,
         "options": {"strict": strict, "force": force},
         "reference": reference_identity.as_dict(),
-        "normal_samples": [next(iter(_alignment_sample_names(normal)), None) for normal in normal_alignments],
+        "normal_samples": normal_samples,
+        "normal_selections": normal_selections,
         "inputs": {
             "targets": input_identity(vcf_path),
             "case": None if alignment_file is None else input_identity(getattr(alignment_file, "filename", None)),
@@ -1859,6 +1869,9 @@ def annotate_vcf_with_pon(
         provenance["inputs"]["targets"] if vcf_path is None else input_identity(pon_path)
     )
     provenance["panel_build"] = metadata.provenance
+    provenance["normal_selections"] = (
+        None if metadata.provenance is None else metadata.provenance.get("normal_selections")
+    )
     _annotate_vcf_stream(
         alignment_file,
         source_vcf_path,

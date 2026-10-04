@@ -432,6 +432,10 @@ keeps each effective prior in `INFO/SKUA_ARTIFACT_PRIOR`; the run record identif
 the record-INFO-then-fallback rule and its fallback value. Cached runs retain the
 PON's quality thresholds, exact file identity, ordered normal sample membership,
 and available build provenance. Normal input identities use that same order.
+`normal_selections` records each normal's effective sample/read groups. Supported
+headerless Python objects explicitly use `all_alignment_reads`; a mixture uses
+the `per_normal_selection` policy label. Cached runs carry the build selections,
+or null when those original read-group details are unavailable.
 
 Local input files (including targets, BAM/CRAM, a supplied reference, and the
 cached PON) receive a SHA-256 of their complete file bytes and a byte size. Hashing

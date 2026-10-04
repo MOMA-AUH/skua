@@ -10,7 +10,7 @@ from pysam import bcftools
 import skua
 from tests.test_normal_identity import alignment, targets
 from skua.pon import inspect_pon, validate_pon
-from tests.helpers import FakeAlignmentFile
+from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 
 
 @pytest.mark.parametrize("suffix", [".vcf", ".vcf.gz"])
@@ -173,7 +173,7 @@ def rewrite_panel_provenance(panel, output, provenance):
     bcftools.index(str(output))
 
 
-@pytest.mark.parametrize("conflict", ["sample", "threshold", "reference", "mode", "version"])
+@pytest.mark.parametrize("conflict", ["sample", "threshold", "reference", "mode", "version", "selection", "selection_sample"])
 def test_contradictory_panel_provenance_is_rejected_before_output(tmp_path, conflict):
     vcf = targets(tmp_path / "targets.vcf")
     panel, damaged = tmp_path / "panel.bcf", tmp_path / "damaged.bcf"
@@ -188,6 +188,10 @@ def test_contradictory_panel_provenance_is_rejected_before_output(tmp_path, conf
         provenance["reference"]["contigs"][0]["length"] = 999
     elif conflict == "mode":
         provenance["mode"] = "live_normals"
+    elif conflict == "selection":
+        provenance["normal_selections"][0]["selection"] = "all_alignment_reads"
+    elif conflict == "selection_sample":
+        provenance["normal_selections"][0]["sample_name"] = "OTHER"
     else:
         provenance["schema_version"] = 999
     rewrite_panel_provenance(panel, damaged, provenance)
@@ -226,6 +230,24 @@ def test_python_objects_without_backing_files_do_not_claim_content_identity(tmp_
         "path": None, "identity_method": "unavailable", "sha256": None, "size_bytes": None,
     }
     assert document["provenance"]["case"]["sample_name"] is None
+
+
+def test_mixed_headerless_and_named_normals_record_their_actual_read_group_selection(tmp_path):
+    vcf = targets(tmp_path / "targets.vcf")
+    headerless = FakeAlignmentFile([FakeRead(
+        mapping_quality=60, is_reverse=False, query_sequence="A" * 30,
+        query_qualities=[35] * 30, aligned_pairs=build_linear_pairs(30, 10),
+    )])
+    with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
+        document = json.loads(skua.annotate_vcf_to_json_with_normals(
+            FakeAlignmentFile([]), vcf, normal_alignments=[headerless, normal],
+        ))
+    assert document["records"][0]["counts"]["normal"]["usable"] == 2
+    assert document["provenance"]["evidence"]["normal_read_groups"] == "per_normal_selection"
+    assert document["provenance"]["normal_selections"] == [
+        {"sample_name": None, "selection": "all_alignment_reads", "read_group_ids": None},
+        {"sample_name": "NORMAL", "selection": "read_groups", "read_group_ids": ["NORMAL"]},
+    ]
 
 
 @pytest.mark.parametrize("metadata", [
