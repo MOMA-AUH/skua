@@ -22,7 +22,7 @@ from .reference import ReferenceIdentity, check_reference_compatibility, read_re
 
 
 PON_SCHEMA_VERSION = 2
-EVIDENCE_POLICY_VERSION = 4
+EVIDENCE_POLICY_VERSION = 5
 PON_HEADER_KEY = "SKUA_PON"
 _ARTIFACT_PRIOR_FIELD_ID = "SKUA_ARTIFACT_PRIOR"
 
@@ -197,7 +197,8 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
     if evidence_policy_version != EVIDENCE_POLICY_VERSION:
         raise ValueError(
             "Unsupported PON evidence policy version "
-            f"{evidence_policy_version}; expected {EVIDENCE_POLICY_VERSION}"
+            f"{evidence_policy_version}; expected {EVIDENCE_POLICY_VERSION}; "
+            "rebuild the PON from the original targets and normal alignments"
         )
 
     sample_names = tuple(header.samples)

@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 import math
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -262,15 +263,89 @@ def _resolve_case_sample(
     raise ValueError("No case alignment sample matches the VCF; specify --sample")
 
 
-def _validate_normal_alignment_samples(normal_alignments: list[Any]) -> None:
-    """Require one read-group sample per normal alignment when metadata is available."""
+def _validate_normal_alignment_samples(
+    normal_alignments: list[Any],
+) -> list[frozenset[str] | None]:
+    """Reject repeated inputs and require distinct biological normal samples."""
+    seen_handles: set[int] = set()
+    seen_files: set[tuple[int, int] | str] = set()
+    seen_samples: set[str] = set()
+    normal_read_groups: list[frozenset[str] | None] = []
     for index, normal_alignment in enumerate(normal_alignments, start=1):
+        if id(normal_alignment) in seen_handles:
+            raise ValueError(f"Duplicate normal alignment handle at input {index}")
+        seen_handles.add(id(normal_alignment))
+        file_identity = _alignment_file_identity(normal_alignment)
+        if file_identity is not None:
+            if file_identity in seen_files:
+                raise ValueError(f"Duplicate normal alignment file at input {index}")
+            seen_files.add(file_identity)
         if _alignment_header_dict(normal_alignment) is None:
+            normal_read_groups.append(None)
             continue
         try:
-            _alignment_sample_name(normal_alignment)
+            sample_name = _alignment_sample_name(normal_alignment)
         except ValueError as exc:
             raise ValueError(f"Normal alignment {index}: {exc}") from exc
+        if sample_name in seen_samples:
+            raise ValueError(
+                "Normal alignment sample names must be unique; "
+                f"duplicate SM {sample_name!r}. Merge same-sample libraries upstream."
+            )
+        seen_samples.add(sample_name)
+        header = _alignment_header_dict(normal_alignment)
+        assert header is not None
+        ids = [group.get("ID") for group in header.get("RG", []) if isinstance(group, dict)]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"Normal alignment {index} has duplicate read-group IDs")
+        read_group_ids = _read_group_ids_for_sample(normal_alignment, sample_name)
+        if not read_group_ids:
+            raise ValueError(f"Normal alignment {index} has no read-group IDs for {sample_name!r}")
+        normal_read_groups.append(read_group_ids)
+    return normal_read_groups
+
+
+def _alignment_file_identity(alignment_file: Any) -> tuple[int, int] | str | None:
+    """Recognize reopened paths, symlinks and hardlinks without reading file content."""
+    filename = getattr(alignment_file, "filename", None)
+    if not filename or filename in {"-", b"-"}:
+        return None
+    path = Path(os.fsdecode(filename)).resolve()
+    try:
+        stat = path.stat()
+    except OSError:
+        return str(path)
+    return stat.st_dev, stat.st_ino
+
+
+def _validate_case_panel_membership(
+    alignment_file: Any,
+    *,
+    allowed_read_group_ids: frozenset[str] | None,
+    normal_alignments: Iterable[Any] = (),
+    normal_sample_names: Iterable[str] = (),
+) -> None:
+    """Reject a case contributing to its own background, where identity is known."""
+    case_samples = {
+        name for name in _alignment_sample_names(alignment_file)
+        if allowed_read_group_ids is None
+        or _read_group_ids_for_sample(alignment_file, name) & allowed_read_group_ids
+    }
+    panel_samples = set(normal_sample_names)
+    case_file_identity = _alignment_file_identity(alignment_file)
+    for normal in normal_alignments:
+        normal_file_identity = _alignment_file_identity(normal)
+        if normal is alignment_file or (
+            case_file_identity is not None and case_file_identity == normal_file_identity
+        ):
+            raise ValueError("Case alignment must not also be a normal input")
+        panel_samples.update(_alignment_sample_names(normal))
+    overlap = case_samples & panel_samples
+    if overlap:
+        raise ValueError(
+            "Case sample is a member of the normal panel: " + ", ".join(sorted(overlap))
+            + ". Supply a panel that excludes the case; automatic leave-one-out is not supported."
+        )
 
 
 def _validate_annotation_parameters(
@@ -1134,6 +1209,10 @@ def annotate_vcf_with_normals(
     def build_supported_annotations(
         case_selection: CaseSampleSelection,
     ) -> Iterator[tuple[Variant, PonAnnotation]]:
+        _validate_case_panel_membership(
+            alignment_file, normal_alignments=normal_alignments,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
+        )
         return annotate_variants_from_vcf_with_normals(
             alignment_file,
             vcf_path,
@@ -1325,6 +1404,11 @@ def annotate_variant_with_normals(
     """Collect case and normal evidence for one variant."""
     if normal_alignments is None:
         normal_alignments = []
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
+    _validate_case_panel_membership(
+        alignment_file, normal_alignments=normal_alignments,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
     check_reference_compatibility(
         [variant.contig], alignment_files=[("Case alignment", alignment_file)]
         + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
@@ -1349,12 +1433,13 @@ def annotate_variant_with_normals(
         unusable_by_reason={},
     )
 
-    for normal_alignment in normal_alignments:
+    for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True):
         normal_evidence = annotate_variant(
             normal_alignment,
             variant,
             min_baseq=min_baseq,
             min_mapq=min_mapq,
+            allowed_read_group_ids=read_group_ids,
         )
         normal_evidences.append(normal_evidence)
 
@@ -1406,6 +1491,7 @@ def _collect_pon_evidence(
     *,
     min_baseq: int,
     min_mapq: int,
+    normal_read_groups: list[frozenset[str] | None],
 ) -> Iterator[tuple[Variant, tuple[AggregatedEvidence, ...]]]:
     """Yield per-normal evidence for each target while sharing nearby fetches."""
     for variant_batch in _variant_batches(variants):
@@ -1415,9 +1501,9 @@ def _collect_pon_evidence(
                 variant_batch,
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
-                allowed_read_group_ids=None,
+                allowed_read_group_ids=read_group_ids,
             )
-            for normal_alignment in normal_alignments
+            for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
         ]
         for variant_index, variant in enumerate(variant_batch):
             yield variant, tuple(
@@ -1453,14 +1539,13 @@ def build_pon(
             replace_existing=force,
         )
 
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
     sample_names: list[str] = []
     for index, normal_alignment in enumerate(normal_alignments, start=1):
         try:
             sample_names.append(_alignment_sample_name(normal_alignment))
         except ValueError as exc:
             raise ValueError(f"Normal alignment {index}: {exc}") from exc
-    if len(set(sample_names)) != len(sample_names):
-        raise ValueError("Normal alignment sample names must be unique")
 
     reference_identity = _validate_vcf_against_inputs(
         vcf_path,
@@ -1486,6 +1571,7 @@ def build_pon(
             _supported_variants_from_vcf(vcf_path),
             min_baseq=min_baseq,
             min_mapq=min_mapq,
+            normal_read_groups=normal_read_groups,
         ),
         min_baseq=min_baseq,
         min_mapq=min_mapq,
@@ -1502,6 +1588,10 @@ def annotate_variants_from_pon(
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield case evidence paired with cached per-normal evidence."""
     metadata = read_pon_metadata(pon_path)
+    _validate_case_panel_membership(
+        alignment_file, normal_sample_names=metadata.sample_names,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
     _validate_vcf_against_inputs(
         pon_path, alignment_files=[("Case alignment", alignment_file)],
         reference_path=None, strict=True, pon_reference=metadata.reference_identity,
@@ -1660,6 +1750,10 @@ def annotate_vcf_with_pon(
     def build_supported_annotations(
         case_selection: CaseSampleSelection,
     ) -> Iterator[tuple[Variant, PonAnnotation]]:
+        _validate_case_panel_membership(
+            alignment_file, normal_sample_names=metadata.sample_names,
+            allowed_read_group_ids=case_selection.allowed_read_group_ids,
+        )
         if vcf_path is not None:
             if pon_evidence_by_variant is None:
                 raise RuntimeError("PON evidence lookup was not initialized")
@@ -1803,6 +1897,11 @@ def annotate_variants_with_normals(
     """Yield case and PON evidence while sharing fetches across dense variants."""
     if normal_alignments is None:
         normal_alignments = []
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
+    _validate_case_panel_membership(
+        alignment_file, normal_alignments=normal_alignments,
+        allowed_read_group_ids=allowed_read_group_ids,
+    )
 
     for variant_batch in _variant_batches(variants):
         check_reference_compatibility(
@@ -1823,9 +1922,9 @@ def annotate_variants_with_normals(
                 variant_batch,
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
-                allowed_read_group_ids=None,
+                allowed_read_group_ids=read_group_ids,
             )
-            for normal_alignment in normal_alignments
+            for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
         ]
 
         for variant_index, variant in enumerate(variant_batch):
