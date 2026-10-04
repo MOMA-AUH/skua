@@ -23,10 +23,13 @@ requirements:
     - pysam >=0.22
 
 test:
+  source_files:
+    - tests/artifact_smoke.py
   imports:
     - skua
   commands:
     - skua annotate --help
+    - python -I tests/artifact_smoke.py --expected-version {{ version }}
 
 about:
   home: https://github.com/MOMA-AUH/skua
