@@ -22,7 +22,7 @@ from .reference import ReferenceIdentity, check_reference_compatibility, read_re
 
 
 PON_SCHEMA_VERSION = 2
-EVIDENCE_POLICY_VERSION = 5
+EVIDENCE_POLICY_VERSION = 6
 PON_HEADER_KEY = "SKUA_PON"
 _ARTIFACT_PRIOR_FIELD_ID = "SKUA_ARTIFACT_PRIOR"
 
