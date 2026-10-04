@@ -38,6 +38,26 @@ Key input parameters:
 
 Skua resolves a single case sample from the VCF sample names and alignment read-group `SM` tags. Use `--sample` when that resolution is ambiguous; it must name a VCF sample and an alignment sample. For a site-only VCF, skua adds the selected alignment sample as the sole output sample. The selected sample must have at least one read-group `ID` in the alignment header. In all cases, only reads whose `RG` tag names one of those read groups contribute case evidence. Untagged reads and reads from unknown or unassigned read groups are excluded.
 
+Each normal alignment represents **one biological sample**, identified by its
+single distinct read-group `SM` value. Merge multiple libraries or files for the
+same sample upstream, retaining their distinct read-group IDs. Skua rejects
+repeated handles, repeated files (including local symlinks/hardlinks), and repeated
+normal `SM` values instead of counting them as independent normals. Normal
+read-group IDs must be unambiguous. As for the case, only reads whose `RG` belongs
+to that sample contribute normal evidence; untagged, unknown, and SM-less groups
+are excluded from both usable and unusable counts. These rules apply to live
+normals and PON construction.
+
+The selected case must not be a panel member: live annotation rejects a shared
+input file or matching sample name, and cached annotation checks the PON's sample
+names. Supply a panel excluding the case; Skua does not perform automatic
+leave-one-out analysis. Identity checks rely on truthful `SM` metadata, not an
+inference of biological identity from reads. The low-level Python evidence APIs
+also reject known duplicate inputs and case membership, but permit alignment-like
+objects without headers; for those objects sample identity and RG assignment
+cannot be verified, and the caller must supply distinct, already isolated samples.
+Building a reusable PON always requires named normal samples.
+
 Other optional parameters:
 - `--min-baseq` (default `20`): Minimum base quality for read bases
 - `--min-mapq` (default `20`): Minimum mapping quality for reads
@@ -340,10 +360,10 @@ unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
 
-The current evidence policy is **version 4**, which excludes records with
-unavailable query names from usable fragment evidence and retains version 3's
-exclusion of internal insertions from simple-MNV evidence. PONs built under
-policies 1, 2, or 3 are rejected
+The current evidence policy is **version 5**, which restricts normal evidence to
+read groups assigned to the normal sample. It also excludes records with
+unavailable query names from usable fragment evidence and internal insertions
+from simple-MNV evidence. PONs built under policies 1 through 4 are rejected
 by annotation and validation, but can still be inspected. Rebuild them from the
 original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
 to replace an existing PON). Changing the header version is not sufficient:

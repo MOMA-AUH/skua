@@ -58,11 +58,12 @@ def build_aligned_segment(
 
 
 
-def create_test_bam(tmp_path: Path, reads: list[pysam.AlignedSegment]) -> Path:
+def create_test_bam(tmp_path: Path, reads: list[pysam.AlignedSegment], *, sample_name: str = "sample") -> Path:
     unsorted_bam = tmp_path / "reads.unsorted.bam"
     sorted_bam = tmp_path / "reads.bam"
 
-    with pysam.AlignmentFile(unsorted_bam, "wb", header=HEADER) as bam_file:
+    header = {**HEADER, "RG": [{**group, "SM": sample_name} for group in HEADER["RG"]]}
+    with pysam.AlignmentFile(unsorted_bam, "wb", header=header) as bam_file:
         for read in reads:
             bam_file.write(read)
 
@@ -203,7 +204,7 @@ def test_mnv_direct_normals_and_cached_pon_agree_with_internal_insertions(
                 )
                 read.query_qualities = [40, inserted_baseq, 40]
                 reads.append(read)
-        bam_paths.append(create_test_bam(sample_path, reads))
+        bam_paths.append(create_test_bam(sample_path, reads, sample_name=sample))
 
     targets = tmp_path / "targets.vcf"
     targets.write_text(
@@ -244,7 +245,7 @@ def test_mnv_direct_normals_and_cached_pon_agree_with_internal_insertions(
             # so two equally incorrect workflows cannot satisfy this regression.
             assert cached.alleles == direct.alleles
             assert dict(cached.info) == dict(direct.info)
-            assert dict(cached.samples["sample"]) == dict(direct.samples["sample"])
+            assert dict(cached.samples["case"]) == dict(direct.samples["case"])
             assert direct.info["SKUA_PON_SAMPLE_COUNT"] == 1
             assert direct.info["SKUA_PON_ALT_FWD"] == 0
             assert direct.info["SKUA_PON_ALT_REV"] == 0
@@ -252,7 +253,7 @@ def test_mnv_direct_normals_and_cached_pon_agree_with_internal_insertions(
             assert direct.info["SKUA_PON_NON_ALT_REV"] == 10
             assert direct.info["SKUA_PON_USABLE"] == 20
             assert direct.info["SKUA_PON_UNUSABLE"] == 4
-            sample = direct.samples["sample"]
+            sample = direct.samples["case"]
             assert sample["SKUA_USABLE"] == 2
             assert sample["SKUA_UNUSABLE"] == 4
             if direct.alts == ("TC",):
