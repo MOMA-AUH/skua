@@ -47,7 +47,7 @@ from .stats import (
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, write_reference_header
 from ._version import __version__
-from .provenance import PROVENANCE_HEADER_KEY, evidence_provenance, input_identity, write_provenance_header
+from .provenance import PROVENANCE_HEADER_KEY, evidence_provenance, write_run_summary_header
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -936,51 +936,28 @@ def _validate_distinct_vcf_paths(vcf_path: str | Path, output_path: str | Path) 
         raise ValueError("output_path must not refer to the input VCF")
 
 
-def _run_provenance(
+def _run_summary(
     mode: str,
-    vcf_path: str | Path,
     *,
-    alignment_file: Any,
-    normal_alignments: list[Any],
     min_baseq: int,
     min_mapq: int,
-    reference_identity: ReferenceIdentity,
     model: dict[str, Any] | None = None,
-    reference_path: str | Path | None = None,
-    strict: bool = False,
-    force: bool = False,
+    case_read_groups: str = "assigned_to_sample",
+    normal_read_groups: str = "assigned_to_sample",
 ) -> dict[str, Any]:
-    """Capture actual inputs and effective policy, independent of output encoding."""
-    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
-    normal_samples = [next(iter(_alignment_sample_names(normal)), None) for normal in normal_alignments]
-    normal_selections = [
-        {
-            "sample_name": sample, "selection": "all_alignment_reads" if groups is None else "read_groups",
-            "read_group_ids": None if groups is None else sorted(groups),
-        }
-        for sample, groups in zip(normal_samples, normal_read_groups, strict=True)
-    ]
+    """Record effective settings without input identities or file reads."""
     return {
-        "schema_version": 1, "skua_version": __version__, "mode": mode,
+        "schema_version": 2, "skua_version": __version__, "mode": mode,
         "evidence": evidence_provenance(
             EVIDENCE_POLICY_VERSION, min_baseq, min_mapq,
-            normal_read_groups="per_normal_selection" if None in normal_read_groups else "assigned_to_sample",
+            normal_read_groups=normal_read_groups,
         ),
+        "case_read_groups": case_read_groups,
         "model": model,
-        "options": {"strict": strict, "force": force},
-        "reference": reference_identity.as_dict(),
-        "normal_samples": normal_samples,
-        "normal_selections": normal_selections,
-        "inputs": {
-            "targets": input_identity(vcf_path),
-            "case": None if alignment_file is None else input_identity(getattr(alignment_file, "filename", None)),
-            "normals": [input_identity(getattr(normal, "filename", None)) for normal in normal_alignments],
-            "reference": None if reference_path is None else input_identity(reference_path),
-        },
     }
 
 
-def _model_provenance(
+def _model_summary(
     truncate: float, pseudocount: float, prior_artifact_probability: float,
     assessment_thresholds: AssessmentThresholds, *, prior_policy: str = "record_info_then_fallback",
 ) -> dict[str, Any]:
@@ -1009,7 +986,7 @@ def _annotate_vcf_stream(
     ],
     force: bool,
     reference_identity: ReferenceIdentity,
-    provenance: dict[str, Any],
+    run_summary: dict[str, Any],
 ) -> None:
     """Write an annotated VCF after caller-specific input preflight.
 
@@ -1051,12 +1028,7 @@ def _annotate_vcf_stream(
             alignment_file,
             requested_sample_name=sample_name,
         )
-        provenance["case"] = {
-            "sample_name": case_selection.sample_name,
-            "read_group_ids": sorted(case_selection.allowed_read_group_ids or ()),
-            "selection": "read_groups",
-        }
-        write_provenance_header(header, provenance)
+        write_run_summary_header(header, run_summary)
         site_only_sample_name: str | None = None
         if len(source_vcf.header.samples) == 0:
             site_only_sample_name = case_selection.sample_name
@@ -1205,11 +1177,9 @@ def annotate_vcf(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
-        provenance=_run_provenance(
-            "case_only", vcf_path, alignment_file=alignment_file, normal_alignments=[],
-            min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity,
-            reference_path=reference_path,
-            strict=strict, force=force,
+        run_summary=_run_summary(
+            "case_only", min_baseq=min_baseq, min_mapq=min_mapq,
+            normal_read_groups="not_applicable",
         ),
     )
 
@@ -1243,7 +1213,7 @@ def annotate_vcf_with_normals(
         prior_artifact_probability=prior_artifact_probability,
     )
     _validate_distinct_vcf_paths(vcf_path, output_path)
-    _validate_normal_alignment_samples(normal_alignments)
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
     reference_identity = _validate_vcf_against_inputs(
         vcf_path,
         alignment_files=[("Case alignment", alignment_file)]
@@ -1304,13 +1274,10 @@ def annotate_vcf_with_normals(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
-        provenance=_run_provenance(
-            "live_normals", vcf_path, alignment_file=alignment_file,
-            normal_alignments=normal_alignments, min_baseq=min_baseq, min_mapq=min_mapq,
-            reference_identity=reference_identity,
-            reference_path=reference_path,
-            strict=strict, force=force,
-            model=_model_provenance(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
+        run_summary=_run_summary(
+            "live_normals", min_baseq=min_baseq, min_mapq=min_mapq,
+            normal_read_groups="per_normal_selection" if None in normal_read_groups else "assigned_to_sample",
+            model=_model_summary(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
         ),
     )
 
@@ -1656,12 +1623,6 @@ def build_pon(
         min_mapq=min_mapq,
         force=force,
         reference_identity=reference_identity,
-        provenance=_run_provenance(
-            "pon_build", vcf_path, alignment_file=None, normal_alignments=normal_alignments,
-            min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity,
-            reference_path=reference_path,
-            strict=True, force=force,
-        ),
     )
 
 
@@ -1856,22 +1817,6 @@ def annotate_vcf_with_pon(
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
 
-    provenance = _run_provenance(
-        "cached_pon", source_vcf_path, alignment_file=alignment_file, normal_alignments=[],
-        min_baseq=metadata.min_baseq, min_mapq=metadata.min_mapq,
-        reference_identity=reference_identity,
-        reference_path=reference_path,
-        strict=True if vcf_path is None else strict, force=force,
-        model=_model_provenance(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
-    )
-    provenance["normal_samples"] = list(metadata.sample_names)
-    provenance["inputs"]["pon"] = (
-        provenance["inputs"]["targets"] if vcf_path is None else input_identity(pon_path)
-    )
-    provenance["panel_build"] = metadata.provenance
-    provenance["normal_selections"] = (
-        None if metadata.provenance is None else metadata.provenance.get("normal_selections")
-    )
     _annotate_vcf_stream(
         alignment_file,
         source_vcf_path,
@@ -1883,7 +1828,10 @@ def annotate_vcf_with_pon(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
-        provenance=provenance,
+        run_summary=_run_summary(
+            "cached_pon", min_baseq=metadata.min_baseq, min_mapq=metadata.min_mapq,
+            model=_model_summary(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
+        ),
     )
 
 
@@ -1965,7 +1913,7 @@ def _render_and_optionally_write(
     return payload
 
 
-def _json_provenance(
+def _json_run_summary(
     alignment_file: Any, vcf_path: str | Path, *, normal_alignments: list[Any],
     min_baseq: int, min_mapq: int, model: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1973,18 +1921,18 @@ def _json_provenance(
         vcf_path, reference_path=None, alignment_files=[("Case alignment", alignment_file)]
         + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
     )
-    provenance = _run_provenance(
-        "case_only" if model is None else "live_normals", vcf_path,
-        alignment_file=alignment_file, normal_alignments=normal_alignments,
-        min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity, model=model,
+    normal_read_groups = _validate_normal_alignment_samples(normal_alignments)
+    summary = _run_summary(
+        "case_only" if model is None else "live_normals",
+        min_baseq=min_baseq, min_mapq=min_mapq, model=model,
+        case_read_groups="all_alignment_reads",
+        normal_read_groups=(
+            "not_applicable" if model is None else
+            "per_normal_selection" if None in normal_read_groups else "assigned_to_sample"
+        ),
     )
-    sample_names = _alignment_sample_names(alignment_file)
-    provenance["case"] = {
-        "sample_name": sample_names[0] if len(sample_names) == 1 else None,
-        "sample_names": list(sample_names), "read_group_ids": None,
-        "selection": "all_alignment_reads",
-    }
-    return provenance
+    summary["reference"] = reference_identity.as_dict()
+    return summary
 
 
 def _render_annotation_document(rows: Iterable[dict[str, Any]], provenance: dict[str, Any]) -> str:
@@ -2006,7 +1954,7 @@ def annotate_vcf_to_json(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
     )
-    provenance = _json_provenance(
+    provenance = _json_run_summary(
         alignment_file, vcf_path, normal_alignments=[], min_baseq=min_baseq, min_mapq=min_mapq, model=None,
     )
     return _render_and_optionally_write(
@@ -2235,10 +2183,10 @@ def annotate_vcf_to_json_with_normals(
     )
     for row in rows:
         row["artifact_prior"] = prior_artifact_probability
-    provenance = _json_provenance(
+    provenance = _json_run_summary(
         alignment_file, vcf_path, normal_alignments=normal_alignments,
         min_baseq=min_baseq, min_mapq=min_mapq,
-        model=_model_provenance(
+        model=_model_summary(
             truncate, pseudocount, prior_artifact_probability, assessment_thresholds, prior_policy="constant",
         ),
     )

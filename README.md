@@ -246,7 +246,7 @@ records.
 
 ### `pon`
 
-Build reusable panel-of-normals artifacts, inspect their provenance, and
+Build reusable panel-of-normals artifacts, inspect their metadata, and
 validate them before annotation.
 
 #### `build`
@@ -314,7 +314,7 @@ skua pon validate hotspots.pon.bcf --reference reference.fa --targets hotspots.v
 skua pon validate hotspots.pon.bcf --json
 ```
 
-`validate` checks the BCF and CSI index, provenance metadata, required FORMAT
+`validate` checks the BCF and CSI index, compatibility metadata, required FORMAT
 fields, target alleles, duplicate targets, coordinate order, and per-sample
 evidence counts. `--reference` additionally checks every PON REF allele;
 `--targets` requires the supplied VCF to define exactly the PON targets. It
@@ -417,88 +417,70 @@ reports the stored build status; `pon validate` checks available supplied
 reference and target metadata and reports definite conflicts as validation
 errors. Structural validity does not imply verified reference identity.
 
-#### Run and PON provenance
+#### Run summary and PON metadata
 
-Annotation outputs and new PON builds contain a `SKUA_PROVENANCE` header record:
-base64-encoded UTF-8 JSON with provenance `schema_version: 1`. Use
-`skua.read_provenance(path)` to decode VCF, bgzip VCF, or BCF metadata. It returns
-`None` for older files without this record and rejects malformed or unsupported
-records. `skua pon inspect panel.bcf --json` includes the build provenance.
+Annotated VCFs contain one human-readable `SKUA_RUN` header record with
+`SchemaVersion=2`. It records the Skua version, mode, evidence-policy version,
+effective base/mapping-quality thresholds, MAPQ-255 exclusion, and read-selection
+policies. Normal-model runs also record truncation, pseudocount, prior policy
+and fallback, and all five assessment thresholds. For example, a case-only run
+with default quality thresholds writes:
 
-The record retains the producer version, evidence policy, effective quality
-thresholds, model parameters, assessment thresholds, prior policy, selected case
-sample/read groups, and reference compatibility result. VCF model annotation
-keeps each effective prior in `INFO/SKUA_ARTIFACT_PRIOR`; the run record identifies
-the record-INFO-then-fallback rule and its fallback value. Cached runs retain the
-PON's quality thresholds, exact file identity, ordered normal sample membership,
-and available build provenance. Normal input identities use that same order.
-`normal_selections` records each normal's effective sample/read groups. Supported
-headerless Python objects explicitly use `all_alignment_reads`; a mixture uses
-the `per_normal_selection` policy label. Cached runs carry the build selections,
-or null when those original read-group details are unavailable.
-
-Local input files (including targets, BAM/CRAM, a supplied reference, and the
-cached PON) receive a SHA-256 of their complete file bytes and a byte size. Hashing
-uses 1 MiB buffers and adds one sequential read per input; the original normals
-are hashed once when building a fixed PON, not on each cached annotation.
-Absolute paths are descriptive locations, **not content identities**. Identical
-file bytes have the same digest even after relocation; recompression can change
-it. Inputs and indices must remain unchanged and consistent during the run.
-Hashing detects size/mtime changes during the hash pass but does not provide a
-filesystem snapshot or validate biological sample labels. Reference verification
-still follows the separate reference contract above.
-
-An input without a local backing file (for example, a custom Python alignment
-object or remote input) has `identity_method: "unavailable"` and a null digest;
-Skua does not invent content identity. A compatible schema-2/policy-6 PON without
-build provenance remains readable: its output has `panel_build: null` while
-still retaining the exact panel digest and header sample membership. New builds
-write provenance, and contradictory build metadata is rejected. Provenance has
-its own version; PON schema and evidence-policy compatibility remain unchanged.
-Forced reannotation replaces the previous run record and preserves unrelated
-annotations.
-
-For example, reconstruct a cached VCF run's settings after checking that the
-available input files match its recorded digests:
-
-```python
-import pysam
-from skua import AssessmentThresholds, annotate_vcf_with_pon, read_provenance
-
-run = read_provenance("annotated.vcf.gz")
-assert run is not None and run["mode"] == "cached_pon"
-inputs, model = run["inputs"], run["model"]
-reference = inputs["reference"]
-reference_path = None if reference is None else reference["path"]
-targets = inputs["targets"]
-with pysam.AlignmentFile(inputs["case"]["path"], "rb",
-                         reference_filename=reference_path) as case:
-    annotate_vcf_with_pon(
-        case, inputs["pon"]["path"], output_path="reproduced.vcf.gz",
-        vcf_path=None if targets["sha256"] == inputs["pon"]["sha256"] else targets["path"],
-        sample_name=run["case"]["sample_name"], reference_path=reference_path,
-        strict=run["options"]["strict"], force=run["options"]["force"],
-        truncate=model["truncate"], pseudocount=model["pseudocount"],
-        prior_artifact_probability=model["prior"]["fallback"],
-        assessment_thresholds=AssessmentThresholds(**model["assessment_thresholds"]),
-    )
+```text
+##SKUA_RUN=<SchemaVersion="2",SkuaVersion="0.7.3",Mode="case_only",EvidencePolicyVersion="6",MinBaseQ="20",MinMapQ="20",MapQ255="exclude",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
+
+`SkuaVersion` reflects the installed version. Cached annotation records the
+PON's effective quality thresholds. VCF model annotation keeps each effective
+prior in `INFO/SKUA_ARTIFACT_PRIOR`; `PriorPolicy=record_info_then_fallback`
+identifies the selection rule and `PriorFallback` records its fallback value.
+The existing reference metadata and per-variant annotations remain unchanged.
+
+Skua no longer writes the base64 `SKUA_PROVENANCE` document. The summary contains
+no input paths or filenames, input-file hashes or sizes, sample names, read-group
+IDs, or embedded PON build history. It adds no full-file checksum reads. Exact
+input traceability belongs in your workflow records; Skua does not create a
+separate manifest. Reference sequence checksums used by reference compatibility
+checks are unchanged.
+
+New PONs retain `SKUA_PON` compatibility metadata, reference metadata, normal
+sample columns, and per-normal evidence. These normal identities are still
+required for membership checks and are not copied into annotated VCF metadata.
+PON schema 2 and evidence policy 6 are unchanged: compatible existing PONs work
+with or without a legacy provenance document. If present, legacy build provenance
+is still validated and is available through `skua pon inspect panel.bcf --json`.
+`skua.read_provenance(path)` remains a reader for those older documents; it
+returns `None` for new files, which have no `SKUA_PROVENANCE` record, and rejects
+malformed or unsupported legacy records.
+
+Forced reannotation replaces both old provenance and previous run summaries.
+Unrelated input VCF headers and sample columns are preserved, including any
+names or paths already written by upstream tools. This change does not anonymize
+an input VCF.
 
 ## Python API
 
 The supported library API is available directly from `skua`. It accepts
 substitutions, MNVs, and left-anchored simple insertions and deletions.
 
-`annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` now return a
-JSON object with `provenance` and `records` keys, rather than a bare record list.
-Read result rows with `json.loads(payload)["records"]`. The standalone row
-formatters and `render_annotation_results_json()` retain their list interface.
+`annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` retain the
+JSON object with `provenance` and `records` keys. The `provenance` value now holds
+the compact summary with `schema_version: 2`, plus the existing reference
+compatibility result. The old `inputs`, `case`, `normal_samples`,
+`normal_selections`, and `options` fields are omitted. Consumers of those old
+metadata fields must update; result rows remain at `json.loads(payload)["records"]`.
+The standalone row formatters and `render_annotation_results_json()` retain
+their list interface.
+
 The JSON wrappers retain their evidence-API semantics: they use all case
-alignment reads without VCF sample selection, and the normal-model wrapper uses
-the supplied constant prior. Provenance explicitly records those choices;
-normal-model rows include their effective `artifact_prior`. VCF-writing APIs
-instead select case read groups and use per-record VCF priors. JSON consumers
-should compare these policy fields before comparing outputs from the two APIs.
+alignment reads without VCF sample selection, recorded as
+`case_read_groups: "all_alignment_reads"`. The normal-model wrapper records
+`model.prior.policy: "constant"` and includes each row's effective `artifact_prior`.
+VCF-writing APIs instead select case read groups and use per-record VCF priors.
+`evidence.normal_read_groups` records `assigned_to_sample`, or
+`per_normal_selection` when headerless Python normals use all reads, without
+listing individual normal identities. Case-only summaries use `not_applicable`.
+Compare these policy fields before comparing outputs from the two APIs.
 
 ```python
 import pysam

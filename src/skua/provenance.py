@@ -1,10 +1,8 @@
-"""Portable run provenance and streaming identities for local input files."""
+"""Compact run summaries and read compatibility for legacy provenance blobs."""
 
 import base64
 import binascii
-import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +12,7 @@ from ._headers import remove_header_records
 
 
 PROVENANCE_HEADER_KEY = "SKUA_PROVENANCE"
+RUN_HEADER_KEY = "SKUA_RUN"
 
 
 def evidence_provenance(
@@ -27,34 +26,34 @@ def evidence_provenance(
     }
 
 
-def input_identity(path: str | bytes | Path | None) -> dict[str, Any]:
-    """Hash local file bytes in bounded memory; explicitly label unavailable identity."""
-    identity: dict[str, Any] = {
-        "path": None if path is None else os.fsdecode(path),
-        "identity_method": "unavailable", "sha256": None, "size_bytes": None,
-    }
-    if path is None or not Path(os.fsdecode(path)).is_file():
-        return identity
-    digest = hashlib.sha256()
-    with open(path, "rb") as source:
-        before = os.fstat(source.fileno())
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-        after = os.fstat(source.fileno())
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-        raise ValueError(f"Input changed while computing provenance: {os.fsdecode(path)}")
-    identity.update(
-        path=str(Path(os.fsdecode(path)).resolve()), identity_method="sha256_file_bytes",
-        sha256=digest.hexdigest(), size_bytes=after.st_size,
-    )
-    return identity
-
-
-def write_provenance_header(header: Any, provenance: dict[str, Any]) -> None:
-    """Replace Skua's record; base64 keeps arbitrary paths safe in VCF headers."""
-    payload = json.dumps(provenance, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    remove_header_records(header, (PROVENANCE_HEADER_KEY,))
-    header.add_meta(PROVENANCE_HEADER_KEY, value=base64.b64encode(payload).decode("ascii"))
+def write_run_summary_header(header: Any, summary: dict[str, Any]) -> None:
+    """Write effective settings as readable VCF fields, replacing old run metadata."""
+    evidence = summary["evidence"]
+    items = [
+        ("SchemaVersion", summary["schema_version"]),
+        ("SkuaVersion", summary["skua_version"]),
+        ("Mode", summary["mode"]),
+        ("EvidencePolicyVersion", evidence["policy_version"]),
+        ("MinBaseQ", evidence["min_baseq"]),
+        ("MinMapQ", evidence["min_mapq"]),
+        ("MapQ255", evidence["mapq_255"]),
+        ("CaseReadGroups", summary["case_read_groups"]),
+        ("NormalReadGroups", evidence["normal_read_groups"]),
+    ]
+    model = summary["model"]
+    if model is not None:
+        items.extend([
+            ("Truncate", model["truncate"]),
+            ("Pseudocount", model["pseudocount"]),
+            ("PriorPolicy", model["prior"]["policy"]),
+            ("PriorFallback", model["prior"]["fallback"]),
+        ])
+        items.extend(
+            ("".join(part.capitalize() for part in name.split("_")), value)
+            for name, value in model["assessment_thresholds"].items()
+        )
+    remove_header_records(header, (PROVENANCE_HEADER_KEY, RUN_HEADER_KEY))
+    header.add_meta(RUN_HEADER_KEY, items=[(key, str(value)) for key, value in items])
 
 
 def read_provenance_header(header: Any) -> dict[str, Any] | None:
@@ -74,6 +73,6 @@ def read_provenance_header(header: Any) -> dict[str, Any] | None:
 
 
 def read_provenance(path: str | Path) -> dict[str, Any] | None:
-    """Return run/build provenance from VCF, bgzip VCF, or BCF; None for legacy files."""
+    """Read a legacy provenance blob; return None for files without one, including new outputs."""
     with pysam.VariantFile(str(path)) as source:
         return read_provenance_header(source.header)

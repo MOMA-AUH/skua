@@ -19,7 +19,7 @@ from ._output import (
 from .evidence import AggregatedEvidence
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, read_reference_header, write_reference_header
-from .provenance import evidence_provenance, read_provenance_header, write_provenance_header
+from .provenance import PROVENANCE_HEADER_KEY, RUN_HEADER_KEY, evidence_provenance, read_provenance_header
 
 
 PON_SCHEMA_VERSION = 2
@@ -608,7 +608,6 @@ def write_pon_artifact(
     min_baseq: int,
     min_mapq: int,
     reference_identity: ReferenceIdentity,
-    provenance: dict[str, Any] | None = None,
     force: bool = False,
 ) -> None:
     """Write per-normal, per-allele evidence to an immutable BCF artifact."""
@@ -636,8 +635,7 @@ def write_pon_artifact(
             )
             _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
             write_reference_header(header, reference_identity)
-            if provenance is not None:
-                write_provenance_header(header, provenance)
+            remove_header_records(header, (PROVENANCE_HEADER_KEY, RUN_HEADER_KEY))
             for sample_name in sample_names:
                 header.add_sample(sample_name)
 
