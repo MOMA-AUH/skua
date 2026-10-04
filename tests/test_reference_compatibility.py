@@ -211,7 +211,7 @@ def test_pon_validation_rejects_conflicting_target_dictionary(tmp_path):
     ('MD5="' + "a" * 32 + '"', 'MD5="invalid"', "Invalid reference checksum"),
     (',MD5="' + "a" * 32 + '"', "", "Invalid reference verification"),
     ("SKUA_REFERENCE_STATUS=VERIFIED", "SKUA_REFERENCE_STATUS=INSUFFICIENT_METADATA", "inconsistent"),
-    ('EvidencePolicyVersion="6"', 'EvidencePolicyVersion="999"', "Unsupported PON evidence policy"),
+    ('EvidencePolicyVersion="7"', 'EvidencePolicyVersion="999"', "Unsupported PON evidence policy"),
     ('ID=chr1,Verified="1"', 'ID=other,Verified="1"', "missing reference identity"),
     ("##contig=<ID=chr1>", "##contig=<ID=chr1,length=300>", "Conflicting reference length"),
 ])

@@ -55,7 +55,7 @@ def test_live_annotation_records_only_effective_settings(tmp_path, suffix):
     assert summary == {
         "SchemaVersion": "1", "SkuaVersion": skua.__version__, "Mode": "live_normals",
         "EvidencePolicyVersion": str(EVIDENCE_POLICY_VERSION), "MinBaseQ": "23", "MinMapQ": "31",
-        "MapQ255": "exclude", "CaseReadGroups": "assigned_to_sample",
+        "CaseReadGroups": "assigned_to_sample",
         "NormalReadGroups": "assigned_to_sample", "Truncate": "0.2", "Pseudocount": "0.01",
         "PriorPolicy": "record_info_then_fallback", "PriorFallback": "0.3",
         "MinCaseDepth": "3", "MinNormalDepth": "4", "MinNormalSamples": "2",
@@ -162,8 +162,10 @@ def test_json_document_retains_minimal_summary_and_actual_python_selection_polic
     assert set(summary) == {"schema_version", "skua_version", "mode", "evidence", "model", "case_read_groups", "reference"}
     assert summary["schema_version"] == 1
     assert summary["skua_version"] == skua.__version__
-    assert summary["evidence"]["min_baseq"] == 24
-    assert summary["evidence"]["min_mapq"] == 32
+    assert summary["evidence"] == {
+        "policy_version": EVIDENCE_POLICY_VERSION, "min_baseq": 24, "min_mapq": 32,
+        "normal_read_groups": "assigned_to_sample" if with_normals else "not_applicable",
+    }
     assert summary["case_read_groups"] == "all_alignment_reads"
     assert_no_input_details(document)
     if with_normals:
