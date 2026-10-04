@@ -23,7 +23,6 @@ class UnusableReason(str, Enum):
     """Reason for excluding a read from evidence counting."""
 
     LOW_MAPQ = "low_mapq"
-    UNAVAILABLE_MAPQ = "unavailable_mapq"
     LOW_BASEQ = "low_baseq"
     MISSING_BASEQ = "missing_baseq"
     NO_BASE_AT_SITE = "no_base_at_site"
@@ -441,15 +440,6 @@ def _deleted_reference_positions(
     return deleted_ref_positions
 
 
-def _mapping_quality_reason(mapping_quality: int, minimum: int) -> UnusableReason | None:
-    """SAM MAPQ 255 is unavailable, regardless of the numeric threshold."""
-    if mapping_quality == 255:
-        return UnusableReason.UNAVAILABLE_MAPQ
-    if mapping_quality < minimum:
-        return UnusableReason.LOW_MAPQ
-    return None
-
-
 def classify_variant_read(
     read: Any,
     *,
@@ -468,12 +458,11 @@ def classify_variant_read(
     """
     ref_base, alt_base = _normalize_simple_alleles(ref_base, alt_base)
 
-    mapping_quality_reason = _mapping_quality_reason(read.mapping_quality, min_mapq)
-    if mapping_quality_reason is not None:
+    if read.mapping_quality < min_mapq:
         return ReadAlleleCall(
             support=AlleleSupport.UNUSABLE,
             is_reverse=read.is_reverse,
-            reason=mapping_quality_reason,
+            reason=UnusableReason.LOW_MAPQ,
         )
 
     ref_len = len(ref_base)
@@ -849,8 +838,7 @@ def collect_evidence_from_alignment_batch(
             unnamed_read_index += 1
 
         alignment_positions = (
-            _alignment_positions(read)
-            if _mapping_quality_reason(read.mapping_quality, min_mapq) is None else None
+            _alignment_positions(read) if read.mapping_quality >= min_mapq else None
         )
         ref_to_query = (
             alignment_positions.ref_to_query

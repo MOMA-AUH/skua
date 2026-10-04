@@ -360,32 +360,22 @@ unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
 
-The current evidence policy is **version 6**, which excludes MAPQ 255 from usable
-evidence and restricts normal evidence to read groups assigned to the normal
-sample. It also excludes records with
-unavailable query names from usable fragment evidence and internal insertions
-from simple-MNV evidence. PONs built under policies 1 through 5 are rejected
-by annotation and validation, but can still be inspected. Rebuild them from the
-original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
-to replace an existing PON). Changing the header version is not sufficient:
-cached counts must be recomputed under the new policy.
+The current evidence policy is **version 7**. Normal evidence is restricted to
+read groups assigned to the normal sample. Records with unavailable query names
+are excluded from usable fragment evidence, and internal insertions are excluded
+from simple-MNV evidence. PON annotation and validation require the current
+evidence-policy version.
 
 The supported production workflow is paired-end targeted DNA mapped with
-`bwa mem`; those production inputs are expected not to contain MAPQ 255. Skua nevertheless
-handles unexpected 255 values explicitly: the [SAM specification, section 1.4](https://samtools.github.io/hts-specs/SAMv1.pdf)
-defines them as unavailable mapping quality. They are unusable even with
-`--min-mapq 0`; no acceptance override is provided. Ordinary MAPQ values still
-pass at or above the configured threshold. Python/JSON evidence diagnostics
-report `unavailable_mapq` separately from `low_mapq`. This policy applies to case
-and normal evidence, single-variant and batched collection, and cached PONs
-through evidence-policy version 6. Normal fragment collapsing still applies:
-a passing mate can supply evidence when the other mate has unavailable MAPQ.
+`bwa mem`. Mapping quality is filtered only by the numeric `--min-mapq` threshold:
+values at or above the threshold pass, including MAPQ 255. Although the
+[SAM specification, section 1.4](https://samtools.github.io/hts-specs/SAMv1.pdf)
+defines 255 as unavailable mapping quality, Skua applies no special exclusion.
+This rule applies to case and normal evidence, single-variant and batched
+collection, and PON construction. Passing reads still undergo all other evidence
+filters and normal fragment collapsing.
 
-The PON schema is now **version 2**, with required reference metadata. Schema-1
-panels (including those made by v0.7.3 with evidence policy 4) can still be
-inspected, but must be rebuilt from the original targets and normal alignments
-before annotation or validation. A header-only upgrade cannot establish the
-reference metadata of the original normal inputs.
+The PON schema is **version 2**, with required reference metadata.
 
 #### Reference compatibility
 
@@ -421,13 +411,13 @@ errors. Structural validity does not imply verified reference identity.
 
 Annotated VCFs contain one human-readable `SKUA_RUN` header record with
 `SchemaVersion=1`. It records the Skua version, mode, evidence-policy version,
-effective base/mapping-quality thresholds, MAPQ-255 exclusion, and read-selection
+effective base/mapping-quality thresholds and read-selection
 policies. Normal-model runs also record truncation, pseudocount, prior policy
 and fallback, and all five assessment thresholds. For example, a case-only run
 with default quality thresholds writes:
 
 ```text
-##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.7.3",Mode="case_only",EvidencePolicyVersion="6",MinBaseQ="20",MinMapQ="20",MapQ255="exclude",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
+##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.7.3",Mode="case_only",EvidencePolicyVersion="7",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
 
 `SkuaVersion` reflects the installed version. Cached annotation records the
@@ -445,7 +435,7 @@ checks are unchanged.
 PONs contain `SKUA_PON` compatibility metadata, reference metadata, normal
 sample columns, and per-normal evidence. These normal identities are
 required for membership checks and are not copied into annotated VCF metadata.
-PON schema 2 and evidence policy 6 define the supported format. Artifacts with
+PON schema 2 and evidence policy 7 define the supported format. Artifacts with
 unsupported versions must be rebuilt from their original targets and alignments.
 
 Forced reannotation replaces Skua annotations and run summaries.

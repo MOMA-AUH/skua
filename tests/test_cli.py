@@ -78,7 +78,7 @@ def _pon_inspection() -> PonInspection:
         index_present=True,
         metadata_record_count=1,
         schema_version="2",
-        evidence_policy_version="6",
+        evidence_policy_version="7",
         min_baseq="20",
         min_mapq="20",
         skua_version="0.7.3",
@@ -96,7 +96,7 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
         "CSI index: present\n"
         "PON metadata records: 1\n"
         "Schema version: 2\n"
-        "Evidence policy version: 6\n"
+        "Evidence policy version: 7\n"
         "Minimum base quality: 20\n"
         "Minimum mapping quality: 20\n"
         "Skua version: 0.7.3\n"
@@ -106,7 +106,7 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
 
     assert cli.main(["pon", "inspect", "panel.pon.bcf", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "evidence_policy_version": "6",
+        "evidence_policy_version": "7",
         "format": "BCF",
         "index_present": True,
         "metadata_record_count": 1,
@@ -160,7 +160,7 @@ def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys
     assert json.loads(capsys.readouterr().out) == {
         "errors": ["PON artifact is missing its .csi index"],
         "inspection": {
-            "evidence_policy_version": "6",
+            "evidence_policy_version": "7",
             "format": "BCF",
             "index_present": True,
             "metadata_record_count": 1,

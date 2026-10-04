@@ -16,7 +16,7 @@ def evidence_summary(
     """Describe quality filters and normal read-selection policy."""
     return {
         "policy_version": policy_version, "min_baseq": min_baseq, "min_mapq": min_mapq,
-        "mapq_255": "exclude", "normal_read_groups": normal_read_groups,
+        "normal_read_groups": normal_read_groups,
     }
 
 
@@ -30,7 +30,6 @@ def write_run_summary_header(header: Any, summary: dict[str, Any]) -> None:
         ("EvidencePolicyVersion", evidence["policy_version"]),
         ("MinBaseQ", evidence["min_baseq"]),
         ("MinMapQ", evidence["min_mapq"]),
-        ("MapQ255", evidence["mapq_255"]),
         ("CaseReadGroups", summary["case_read_groups"]),
         ("NormalReadGroups", evidence["normal_read_groups"]),
     ]
