@@ -205,7 +205,7 @@ def test_schema_two_panel_with_old_normal_policy_requires_rebuild(tmp_path):
     with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
         build_pon(vcf, normal_alignments=[normal], output_path=panel)
     serialized = bcftools.view("-Ov", str(panel))
-    old = serialized.replace('EvidencePolicyVersion="5"', 'EvidencePolicyVersion="4"')
+    old = serialized.replace('EvidencePolicyVersion="6"', 'EvidencePolicyVersion="4"')
     assert old != serialized
     (tmp_path / "old.vcf").write_text(old)
     bcftools.view("-Ob", "-o", str(legacy), str(tmp_path / "old.vcf"), catch_stdout=False)

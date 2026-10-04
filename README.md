@@ -360,14 +360,26 @@ unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
 
-The current evidence policy is **version 5**, which restricts normal evidence to
-read groups assigned to the normal sample. It also excludes records with
+The current evidence policy is **version 6**, which excludes MAPQ 255 from usable
+evidence and restricts normal evidence to read groups assigned to the normal
+sample. It also excludes records with
 unavailable query names from usable fragment evidence and internal insertions
-from simple-MNV evidence. PONs built under policies 1 through 4 are rejected
+from simple-MNV evidence. PONs built under policies 1 through 5 are rejected
 by annotation and validation, but can still be inspected. Rebuild them from the
 original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
 to replace an existing PON). Changing the header version is not sufficient:
 cached counts must be recomputed under the new policy.
+
+The supported production workflow is paired-end targeted DNA mapped with
+`bwa mem`; those production inputs are expected not to contain MAPQ 255. Skua nevertheless
+handles unexpected 255 values explicitly: the [SAM specification, section 1.4](https://samtools.github.io/hts-specs/SAMv1.pdf)
+defines them as unavailable mapping quality. They are unusable even with
+`--min-mapq 0`; no acceptance override is provided. Ordinary MAPQ values still
+pass at or above the configured threshold. Python/JSON evidence diagnostics
+report `unavailable_mapq` separately from `low_mapq`. This policy applies to case
+and normal evidence, single-variant and batched collection, and cached PONs
+through evidence-policy version 6. Normal fragment collapsing still applies:
+a passing mate can supply evidence when the other mate has unavailable MAPQ.
 
 The PON schema is now **version 2**, with required reference metadata. Schema-1
 panels (including those made by v0.7.3 with evidence policy 4) can still be
