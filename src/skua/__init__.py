@@ -22,6 +22,7 @@ from .pon import PonArtifactMetadata, read_pon_evidence, read_pon_metadata
 from .stats import AssessmentStatus, AssessmentThresholds, Stats, compute_stats
 from .variants import Variant, VariantKind
 from ._version import __version__
+from .provenance import read_provenance
 
 __all__ = [
     "AggregatedEvidence",
@@ -52,5 +53,6 @@ __all__ = [
     "compute_stats",
     "read_pon_evidence",
     "read_pon_metadata",
+    "read_provenance",
     "__version__",
 ]

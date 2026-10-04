@@ -417,10 +417,84 @@ reports the stored build status; `pon validate` checks available supplied
 reference and target metadata and reports definite conflicts as validation
 errors. Structural validity does not imply verified reference identity.
 
+#### Run and PON provenance
+
+Annotation outputs and new PON builds contain a `SKUA_PROVENANCE` header record:
+base64-encoded UTF-8 JSON with provenance `schema_version: 1`. Use
+`skua.read_provenance(path)` to decode VCF, bgzip VCF, or BCF metadata. It returns
+`None` for older files without this record and rejects malformed or unsupported
+records. `skua pon inspect panel.bcf --json` includes the build provenance.
+
+The record retains the producer version, evidence policy, effective quality
+thresholds, model parameters, assessment thresholds, prior policy, selected case
+sample/read groups, and reference compatibility result. VCF model annotation
+keeps each effective prior in `INFO/SKUA_ARTIFACT_PRIOR`; the run record identifies
+the record-INFO-then-fallback rule and its fallback value. Cached runs retain the
+PON's quality thresholds, exact file identity, ordered normal sample membership,
+and available build provenance. Normal input identities use that same order.
+
+Local input files (including targets, BAM/CRAM, a supplied reference, and the
+cached PON) receive a SHA-256 of their complete file bytes and a byte size. Hashing
+uses 1 MiB buffers and adds one sequential read per input; the original normals
+are hashed once when building a fixed PON, not on each cached annotation.
+Absolute paths are descriptive locations, **not content identities**. Identical
+file bytes have the same digest even after relocation; recompression can change
+it. Inputs and indices must remain unchanged and consistent during the run.
+Hashing detects size/mtime changes during the hash pass but does not provide a
+filesystem snapshot or validate biological sample labels. Reference verification
+still follows the separate reference contract above.
+
+An input without a local backing file (for example, a custom Python alignment
+object or remote input) has `identity_method: "unavailable"` and a null digest;
+Skua does not invent content identity. A compatible schema-2/policy-6 PON without
+build provenance remains readable: its output has `panel_build: null` while
+still retaining the exact panel digest and header sample membership. New builds
+write provenance, and contradictory build metadata is rejected. Provenance has
+its own version; PON schema and evidence-policy compatibility remain unchanged.
+Forced reannotation replaces the previous run record and preserves unrelated
+annotations.
+
+For example, reconstruct a cached VCF run's settings after checking that the
+available input files match its recorded digests:
+
+```python
+import pysam
+from skua import AssessmentThresholds, annotate_vcf_with_pon, read_provenance
+
+run = read_provenance("annotated.vcf.gz")
+assert run is not None and run["mode"] == "cached_pon"
+inputs, model = run["inputs"], run["model"]
+reference = inputs["reference"]
+reference_path = None if reference is None else reference["path"]
+targets = inputs["targets"]
+with pysam.AlignmentFile(inputs["case"]["path"], "rb",
+                         reference_filename=reference_path) as case:
+    annotate_vcf_with_pon(
+        case, inputs["pon"]["path"], output_path="reproduced.vcf.gz",
+        vcf_path=None if targets["sha256"] == inputs["pon"]["sha256"] else targets["path"],
+        sample_name=run["case"]["sample_name"], reference_path=reference_path,
+        strict=run["options"]["strict"], force=run["options"]["force"],
+        truncate=model["truncate"], pseudocount=model["pseudocount"],
+        prior_artifact_probability=model["prior"]["fallback"],
+        assessment_thresholds=AssessmentThresholds(**model["assessment_thresholds"]),
+    )
+```
+
 ## Python API
 
 The supported library API is available directly from `skua`. It accepts
 substitutions, MNVs, and left-anchored simple insertions and deletions.
+
+`annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` now return a
+JSON object with `provenance` and `records` keys, rather than a bare record list.
+Read result rows with `json.loads(payload)["records"]`. The standalone row
+formatters and `render_annotation_results_json()` retain their list interface.
+The JSON wrappers retain their evidence-API semantics: they use all case
+alignment reads without VCF sample selection, and the normal-model wrapper uses
+the supplied constant prior. Provenance explicitly records those choices;
+normal-model rows include their effective `artifact_prior`. VCF-writing APIs
+instead select case read groups and use per-record VCF priors. JSON consumers
+should compare these policy fields before comparing outputs from the two APIs.
 
 ```python
 import pysam

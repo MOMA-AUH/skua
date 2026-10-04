@@ -372,8 +372,8 @@ def test_annotate_vcf_to_json_returns_payload_and_writes_file(tmp_path) -> None:
             },
         }
     ]
-    assert json.loads(payload) == expected_rows
-    assert json.loads(output_path.read_text(encoding="utf-8")) == expected_rows
+    assert json.loads(payload)["records"] == expected_rows
+    assert json.loads(output_path.read_text(encoding="utf-8"))["records"] == expected_rows
 
 
 def test_annotate_vcf_writes_case_format_fields(tmp_path) -> None:
@@ -1882,7 +1882,7 @@ def test_annotate_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> None
     )
 
     import json
-    result = json.loads(payload)
+    result = json.loads(payload)["records"]
     assert len(result) == 1
     assert result[0]["contig"] == "chr1"
     assert result[0]["pos1"] == 106
@@ -1911,6 +1911,7 @@ def test_annotate_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> None
         "alt",
         "stats",
         "counts",
+        "artifact_prior",
     ]
     assert list(result[0]["stats"].keys()) == [
         "artifact_posterior",

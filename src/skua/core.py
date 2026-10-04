@@ -2,7 +2,7 @@
 
 import gzip
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 import math
 import os
@@ -29,6 +29,7 @@ from .evidence import (
     collect_evidence_from_alignment_batch,
 )
 from .pon import (
+    EVIDENCE_POLICY_VERSION,
     PON_EVIDENCE_FORMAT_FIELDS,
     PON_HEADER_KEY,
     read_pon_evidence,
@@ -45,6 +46,8 @@ from .stats import (
 )
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, write_reference_header
+from ._version import __version__
+from .provenance import PROVENANCE_HEADER_KEY, input_identity, write_provenance_header
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -592,7 +595,7 @@ def _validate_no_existing_skua_annotations(
         if (
             record.key.startswith("SKUA_")
             and not (allow_pon_storage and record.key in {
-                PON_HEADER_KEY, "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS",
+                PON_HEADER_KEY, "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS", PROVENANCE_HEADER_KEY,
             })
             and record.key not in existing_annotations
         ):
@@ -933,6 +936,51 @@ def _validate_distinct_vcf_paths(vcf_path: str | Path, output_path: str | Path) 
         raise ValueError("output_path must not refer to the input VCF")
 
 
+def _run_provenance(
+    mode: str,
+    vcf_path: str | Path,
+    *,
+    alignment_file: Any,
+    normal_alignments: list[Any],
+    min_baseq: int,
+    min_mapq: int,
+    reference_identity: ReferenceIdentity,
+    model: dict[str, Any] | None = None,
+    reference_path: str | Path | None = None,
+    strict: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Capture actual inputs and effective policy, independent of output encoding."""
+    return {
+        "schema_version": 1, "skua_version": __version__, "mode": mode,
+        "evidence": {
+            "policy_version": EVIDENCE_POLICY_VERSION, "min_baseq": min_baseq, "min_mapq": min_mapq,
+            "mapq_255": "exclude", "normal_read_groups": "assigned_to_sample",
+        },
+        "model": model,
+        "options": {"strict": strict, "force": force},
+        "reference": reference_identity.as_dict(),
+        "normal_samples": [next(iter(_alignment_sample_names(normal)), None) for normal in normal_alignments],
+        "inputs": {
+            "targets": input_identity(vcf_path),
+            "case": None if alignment_file is None else input_identity(getattr(alignment_file, "filename", None)),
+            "normals": [input_identity(getattr(normal, "filename", None)) for normal in normal_alignments],
+            "reference": None if reference_path is None else input_identity(reference_path),
+        },
+    }
+
+
+def _model_provenance(
+    truncate: float, pseudocount: float, prior_artifact_probability: float,
+    assessment_thresholds: AssessmentThresholds, *, prior_policy: str = "record_info_then_fallback",
+) -> dict[str, Any]:
+    return {
+        "truncate": truncate, "pseudocount": pseudocount,
+        "prior": {"policy": prior_policy, "fallback": prior_artifact_probability},
+        "assessment_thresholds": asdict(assessment_thresholds),
+    }
+
+
 def _annotate_vcf_stream(
     alignment_file: Any,
     vcf_path: str | Path,
@@ -951,6 +999,7 @@ def _annotate_vcf_stream(
     ],
     force: bool,
     reference_identity: ReferenceIdentity,
+    provenance: dict[str, Any],
 ) -> None:
     """Write an annotated VCF after caller-specific input preflight.
 
@@ -992,6 +1041,12 @@ def _annotate_vcf_stream(
             alignment_file,
             requested_sample_name=sample_name,
         )
+        provenance["case"] = {
+            "sample_name": case_selection.sample_name,
+            "read_group_ids": sorted(case_selection.allowed_read_group_ids or ()),
+            "selection": "read_groups",
+        }
+        write_provenance_header(header, provenance)
         site_only_sample_name: str | None = None
         if len(source_vcf.header.samples) == 0:
             site_only_sample_name = case_selection.sample_name
@@ -1140,6 +1195,12 @@ def annotate_vcf(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
+        provenance=_run_provenance(
+            "case_only", vcf_path, alignment_file=alignment_file, normal_alignments=[],
+            min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity,
+            reference_path=reference_path,
+            strict=strict, force=force,
+        ),
     )
 
 
@@ -1233,6 +1294,14 @@ def annotate_vcf_with_normals(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
+        provenance=_run_provenance(
+            "live_normals", vcf_path, alignment_file=alignment_file,
+            normal_alignments=normal_alignments, min_baseq=min_baseq, min_mapq=min_mapq,
+            reference_identity=reference_identity,
+            reference_path=reference_path,
+            strict=strict, force=force,
+            model=_model_provenance(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
+        ),
     )
 
 
@@ -1577,6 +1646,12 @@ def build_pon(
         min_mapq=min_mapq,
         force=force,
         reference_identity=reference_identity,
+        provenance=_run_provenance(
+            "pon_build", vcf_path, alignment_file=None, normal_alignments=normal_alignments,
+            min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity,
+            reference_path=reference_path,
+            strict=True, force=force,
+        ),
     )
 
 
@@ -1771,6 +1846,19 @@ def annotate_vcf_with_pon(
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
 
+    provenance = _run_provenance(
+        "cached_pon", source_vcf_path, alignment_file=alignment_file, normal_alignments=[],
+        min_baseq=metadata.min_baseq, min_mapq=metadata.min_mapq,
+        reference_identity=reference_identity,
+        reference_path=reference_path,
+        strict=True if vcf_path is None else strict, force=force,
+        model=_model_provenance(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
+    )
+    provenance["normal_samples"] = list(metadata.sample_names)
+    provenance["inputs"]["pon"] = (
+        provenance["inputs"]["targets"] if vcf_path is None else input_identity(pon_path)
+    )
+    provenance["panel_build"] = metadata.provenance
     _annotate_vcf_stream(
         alignment_file,
         source_vcf_path,
@@ -1782,6 +1870,7 @@ def annotate_vcf_with_pon(
         annotate_supported_record=annotate_supported_record,
         force=force,
         reference_identity=reference_identity,
+        provenance=provenance,
     )
 
 
@@ -1863,6 +1952,32 @@ def _render_and_optionally_write(
     return payload
 
 
+def _json_provenance(
+    alignment_file: Any, vcf_path: str | Path, *, normal_alignments: list[Any],
+    min_baseq: int, min_mapq: int, model: dict[str, Any] | None,
+) -> dict[str, Any]:
+    reference_identity = _validate_vcf_against_inputs(
+        vcf_path, reference_path=None, alignment_files=[("Case alignment", alignment_file)]
+        + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
+    )
+    provenance = _run_provenance(
+        "case_only" if model is None else "live_normals", vcf_path,
+        alignment_file=alignment_file, normal_alignments=normal_alignments,
+        min_baseq=min_baseq, min_mapq=min_mapq, reference_identity=reference_identity, model=model,
+    )
+    sample_names = _alignment_sample_names(alignment_file)
+    provenance["case"] = {
+        "sample_name": sample_names[0] if len(sample_names) == 1 else None,
+        "sample_names": list(sample_names), "read_group_ids": None,
+        "selection": "all_alignment_reads",
+    }
+    return provenance
+
+
+def _render_annotation_document(rows: Iterable[dict[str, Any]], provenance: dict[str, Any]) -> str:
+    return json.dumps({"provenance": provenance, "records": list(rows)}, indent=2, allow_nan=False)
+
+
 def annotate_vcf_to_json(
     alignment_file: Any,
     vcf_path: str | Path,
@@ -1871,16 +1986,19 @@ def annotate_vcf_to_json(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Run variant annotation from VCF and return JSON output, optionally writing to file."""
+    """Return a JSON document with provenance and records, optionally writing it to file."""
     rows = _build_annotation_rows(
         alignment_file,
         vcf_path,
         min_baseq=min_baseq,
         min_mapq=min_mapq,
     )
+    provenance = _json_provenance(
+        alignment_file, vcf_path, normal_alignments=[], min_baseq=min_baseq, min_mapq=min_mapq, model=None,
+    )
     return _render_and_optionally_write(
         rows,
-        renderer=render_annotation_results_json,
+        renderer=lambda values: _render_annotation_document(values, provenance),
         output_path=output_path,
     )
 
@@ -2087,7 +2205,7 @@ def annotate_vcf_to_json_with_normals(
     prior_artifact_probability: float = 0.5,
     assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
 ) -> str:
-    """Run PON variant annotation from VCF and return JSON output, optionally writing to file."""
+    """Return normal-model records and provenance, retaining the evidence API's constant prior."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -2102,8 +2220,17 @@ def annotate_vcf_to_json_with_normals(
         prior_artifact_probability=prior_artifact_probability,
         assessment_thresholds=assessment_thresholds,
     )
+    for row in rows:
+        row["artifact_prior"] = prior_artifact_probability
+    provenance = _json_provenance(
+        alignment_file, vcf_path, normal_alignments=normal_alignments,
+        min_baseq=min_baseq, min_mapq=min_mapq,
+        model=_model_provenance(
+            truncate, pseudocount, prior_artifact_probability, assessment_thresholds, prior_policy="constant",
+        ),
+    )
     return _render_and_optionally_write(
         rows,
-        renderer=render_annotation_results_json,
+        renderer=lambda values: _render_annotation_document(values, provenance),
         output_path=output_path,
     )

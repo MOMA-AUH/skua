@@ -107,6 +107,7 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
         "skua_version": "0.5.0",
         "reference_status": None,
         "reference_identity": None,
+        "provenance": None,
     }
 
 
@@ -161,6 +162,7 @@ def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys
             "skua_version": "0.5.0",
             "reference_status": None,
             "reference_identity": None,
+            "provenance": None,
         },
         "valid": False,
     }
