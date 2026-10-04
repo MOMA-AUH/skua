@@ -9,7 +9,7 @@ import pysam
 from pysam import bcftools
 
 from ._version import __version__
-from ._headers import remove_header_records
+from ._headers import remove_header_records, unquote_header_value
 from ._output import (
     cleanup_paths,
     ensure_outputs_available,
@@ -114,13 +114,6 @@ class PonValidationResult:
         }
 
 
-def _unquote_header_value(value: Any) -> str:
-    text = str(value)
-    if len(text) >= 2 and text[0] == text[-1] == '"':
-        return text[1:-1]
-    return text
-
-
 def _metadata_records(header: Any) -> list[Any]:
     """Return every PON provenance record found in a VCF header."""
     return [record for record in header.records if record.key == PON_HEADER_KEY]
@@ -129,7 +122,7 @@ def _metadata_records(header: Any) -> list[Any]:
 def _metadata_items_from_record(record: Any) -> dict[str, str]:
     """Return normalized metadata values from one PON provenance record."""
     return {
-        key: _unquote_header_value(value)
+        key: unquote_header_value(value)
         for key, value in record.items()
         if key != "IDX"
     }
@@ -431,17 +424,18 @@ def validate_pon(
         errors.append("PON artifact must contain at least one target record")
 
     variant_tuple = tuple(variants)
+    checked_reference = None if metadata is None else metadata.reference_identity
     if metadata is not None:
         try:
             if reference_path is not None:
                 with pysam.FastaFile(str(reference_path)) as fasta:
-                    check_reference_compatibility(
+                    checked_reference = check_reference_compatibility(
                         (v.contig for v in variants), alignment_files=[], fasta_file=fasta,
                         pon_reference=metadata.reference_identity,
                         vcf_header=pon_header,
                     )
             else:
-                check_reference_compatibility(
+                checked_reference = check_reference_compatibility(
                     (v.contig for v in variants), alignment_files=[],
                     pon_reference=metadata.reference_identity,
                     vcf_header=pon_header,
@@ -453,11 +447,11 @@ def validate_pon(
 
     if target_vcf_path is not None:
         try:
-            if metadata is not None:
+            if checked_reference is not None:
                 with pysam.VariantFile(str(target_vcf_path)) as targets:
                     check_reference_compatibility(
                         (v.contig for v in variants), alignment_files=[],
-                        pon_reference=metadata.reference_identity, vcf_header=targets.header,
+                        pon_reference=checked_reference, vcf_header=targets.header,
                     )
             if variant_tuple != _target_variants(target_vcf_path):
                 errors.append("PON artifact targets do not match the supplied target VCF")

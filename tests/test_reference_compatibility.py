@@ -6,6 +6,10 @@ from pysam import bcftools
 
 from skua import annotate_vcf_with_normals, annotate_vcf_with_pon, build_pon, read_pon_metadata
 from skua import annotate_variant_with_normals, annotate_variants_with_normals, annotate_variants_from_pon, Variant
+from skua import (
+    annotate_variants_from_vcf, annotate_variants_from_vcf_with_normals,
+    annotate_vcf_to_json, annotate_vcf_to_json_with_normals,
+)
 from skua.pon import inspect_pon, validate_pon
 
 
@@ -251,3 +255,41 @@ def test_forced_annotation_refreshes_reference_metadata_preserving_other_headers
         assert statuses == ["INSUFFICIENT_METADATA"]
         assert "##external=keep" in str(result.header)
         assert "MD5=" not in str(result.header)
+
+
+@pytest.mark.parametrize("checksum,conflict", [("a" * 32, False), ("b" * 32, True)])
+def test_quoted_vcf_checksums_are_compared_as_sequence_identities(tmp_path, checksum, conflict):
+    vcf = targets(tmp_path / "targets.vcf")
+    vcf.write_text(vcf.read_text().replace("ID=chr1>", f'ID=chr1,md5="{checksum}">'))
+    with alignment(tmp_path / "case.bam", "CASE", 200, "a" * 32) as case:
+        if conflict:
+            with pytest.raises(ValueError, match="Conflicting reference checksum"):
+                annotate_vcf_with_normals(case, vcf, output_path=tmp_path / "out.vcf")
+        else:
+            annotate_vcf_with_normals(case, vcf, output_path=tmp_path / "out.vcf")
+
+
+@pytest.mark.parametrize("entry_point", [
+    annotate_variants_from_vcf, annotate_variants_from_vcf_with_normals,
+    annotate_vcf_to_json, annotate_vcf_to_json_with_normals,
+])
+def test_vcf_iterators_and_json_reject_conflicting_target_headers(tmp_path, entry_point):
+    vcf = targets(tmp_path / "targets.vcf")
+    vcf.write_text(vcf.read_text().replace("ID=chr1>", "ID=chr1,length=300>"))
+    with alignment(tmp_path / "case.bam", "CASE", 200) as case:
+        with pytest.raises(ValueError, match="Conflicting reference length"):
+            list(entry_point(case, vcf))
+
+
+def test_pon_validation_compares_supplied_fasta_and_targets_when_panel_identity_is_incomplete(tmp_path):
+    vcf = targets(tmp_path / "targets.vcf")
+    panel = tmp_path / "panel.bcf"
+    with alignment(tmp_path / "normal.bam", "NORMAL", 200) as normal:
+        build_pon(vcf, normal_alignments=[normal], output_path=panel)
+    fasta = tmp_path / "reference.fa"
+    fasta.write_text(">chr1\n" + "A" * 200 + "\n")
+    pysam.faidx(str(fasta))
+    vcf.write_text(vcf.read_text().replace("ID=chr1>", "ID=chr1,md5=" + "b" * 32 + ">"))
+    result = validate_pon(panel, reference_path=fasta, target_vcf_path=vcf)
+    assert not result.valid
+    assert any("Conflicting reference checksum" in error for error in result.errors)

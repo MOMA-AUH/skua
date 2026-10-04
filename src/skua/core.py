@@ -1388,6 +1388,9 @@ def annotate_variants_from_vcf(
     allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
     """Yield per-variant evidence for variant records from a VCF file."""
+    _validate_vcf_against_inputs(
+        vcf_path, alignment_files=[("Case alignment", alignment_file)], reference_path=None,
+    )
     yield from annotate_variants(
         alignment_file,
         _supported_variants_from_vcf(vcf_path),
@@ -1850,6 +1853,10 @@ def annotate_variants_from_vcf_with_normals(
     allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield per-variant case+normal evidence for variant records from a VCF file."""
+    _validate_vcf_against_inputs(
+        vcf_path, reference_path=None, alignment_files=[("Case alignment", alignment_file)]
+        + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments or [], 1)],
+    )
     yield from annotate_variants_with_normals(
         alignment_file,
         _supported_variants_from_vcf(vcf_path),

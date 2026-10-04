@@ -3,6 +3,12 @@
 from typing import Any, Iterable
 
 
+def unquote_header_value(value: Any) -> str:
+    """Decode the optional surrounding quotes retained by pysam header proxies."""
+    text = str(value)
+    return text[1:-1] if len(text) >= 2 and text[0] == text[-1] == '"' else text
+
+
 def remove_header_records(header: Any, keys: Iterable[str]) -> None:
     """Refresh record proxies after each deletion, including duplicate keys."""
     for key in set(keys):

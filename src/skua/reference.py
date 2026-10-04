@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import re
 from typing import Any, Iterable
-from ._headers import remove_header_records
+from ._headers import remove_header_records, unquote_header_value
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ def read_reference_header(header: Any) -> ReferenceIdentity:
     for record in header.records:
         if record.key != "SKUA_REFERENCE":
             continue
-        values = {key: str(value).strip('"') for key, value in record.items()}
+        values = {key: unquote_header_value(value) for key, value in record.items()}
         name = values.get("ID")
         if not name or name in seen:
             raise ValueError("PON artifact has missing or duplicate reference contig identity")
@@ -100,10 +100,12 @@ def check_reference_compatibility(
             c.name: {"LN": c.length, "M5": c.md5} for c in pon_reference.contigs
         }, True))
     if vcf_header is not None:
-        dictionaries.append(("Target VCF", {
-            record.get("ID"): {"LN": record.get("length"), "M5": record.get("md5")}
-            for record in vcf_header.records if record.key == "contig"
-        }, False))
+        vcf_dictionary = {}
+        for record in vcf_header.records:
+            if record.key == "contig":
+                values = {key: unquote_header_value(value) for key, value in record.items()}
+                vcf_dictionary[values["ID"]] = {"LN": values.get("length"), "M5": values.get("md5")}
+        dictionaries.append(("Target VCF", vcf_dictionary, False))
     if fasta_file is not None:
         dictionary = {}
         for name in names:
