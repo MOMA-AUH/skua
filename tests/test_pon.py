@@ -126,7 +126,7 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
     )
 
     metadata = read_pon_metadata(output_path)
-    assert metadata.schema_version == 1
+    assert metadata.schema_version == 2
     assert metadata.evidence_policy_version == 4
     assert metadata.min_baseq == 25
     assert metadata.min_mapq == 30
@@ -173,8 +173,10 @@ def _write_pon_with_count_schema(
     fields = [field for field, _ in PON_EVIDENCE_FORMAT_FIELDS]
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n##contig=<ID=chr1>\n"
-        f"##SKUA_PON=<SchemaVersion=1,EvidencePolicyVersion={EVIDENCE_POLICY_VERSION},"
+        f"##SKUA_PON=<SchemaVersion=2,EvidencePolicyVersion={EVIDENCE_POLICY_VERSION},"
         'MinBaseQ=20,MinMapQ=20,SkuaVersion="0.7.1">\n'
+        '##SKUA_REFERENCE_STATUS=INSUFFICIENT_METADATA\n'
+        '##SKUA_REFERENCE=<ID=chr1,Verified=0>\n'
         + "".join(
             f'##FORMAT=<ID={field},Number={number},Type={field_type},Description="Count">\n'
             for field in fields
@@ -443,14 +445,14 @@ def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) 
     assert inspection.format == "BCF"
     assert inspection.index_present is True
     assert inspection.metadata_record_count == 1
-    assert inspection.schema_version == "1"
+    assert inspection.schema_version == "2"
     assert inspection.evidence_policy_version == "4"
     assert inspection.min_baseq == "25"
     assert inspection.min_mapq == "30"
     assert inspection.sample_names == ("N1",)
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3])
+@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
 def test_legacy_pon_can_be_inspected_but_not_read(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
     _write_legacy_pon(pon_path, policy_version)
@@ -460,17 +462,17 @@ def test_legacy_pon_can_be_inspected_but_not_read(tmp_path, policy_version) -> N
     assert inspection.evidence_policy_version == str(policy_version)
     with pytest.raises(
         ValueError,
-        match=f"Unsupported PON evidence policy version {policy_version}; expected 4",
+        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
     ):
         read_pon_metadata(pon_path)
     with pytest.raises(
         ValueError,
-        match=f"Unsupported PON evidence policy version {policy_version}; expected 4",
+        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
     ):
         list(read_pon_evidence(pon_path))
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3])
+@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
 def test_validate_pon_rejects_legacy_artifact(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
     _write_legacy_pon(pon_path, policy_version)
@@ -479,11 +481,11 @@ def test_validate_pon_rejects_legacy_artifact(tmp_path, policy_version) -> None:
 
     assert result.valid is False
     assert result.errors == (
-        f"Unsupported PON evidence policy version {policy_version}; expected 4",
+        "Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
     )
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3])
+@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
 def test_cached_annotation_rejects_legacy_pon_before_output(tmp_path, policy_version) -> None:
     pon_path = tmp_path / "legacy.pon.bcf"
     output_path = tmp_path / "annotated.vcf"
@@ -496,7 +498,7 @@ def test_cached_annotation_rejects_legacy_pon_before_output(tmp_path, policy_ver
 
     with pytest.raises(
         ValueError,
-        match=f"Unsupported PON evidence policy version {policy_version}; expected 4",
+        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
     ):
         annotate_vcf_with_pon(case, pon_path, output_path=output_path)
 
