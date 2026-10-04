@@ -1,0 +1,311 @@
+"""Assessment eligibility through the supported Python and CLI interfaces."""
+
+from contextlib import ExitStack
+import json
+
+import pysam
+import pytest
+
+import skua
+from skua.cli import main
+
+
+def _evidence(alt_forward=0, alt_reverse=0, non_alt_forward=0, non_alt_reverse=0):
+    return skua.AggregatedEvidence(
+        alt_forward=alt_forward,
+        alt_reverse=alt_reverse,
+        non_alt_forward=non_alt_forward,
+        non_alt_reverse=non_alt_reverse,
+        usable=alt_forward + alt_reverse + non_alt_forward + non_alt_reverse,
+        unusable=0,
+        unusable_by_reason={},
+    )
+
+
+def test_zero_evidence_retains_prior_but_is_not_assessed() -> None:
+    stats = skua.compute_stats(
+        _evidence(), _evidence(), per_sample_evidences=[],
+        prior_artifact_probability=0.001,
+    )
+
+    assert stats.assessment_status == "INSUFFICIENT_EVIDENCE"
+    assert stats.assessment_reasons == ("CASE_DEPTH", "NORMAL_DEPTH")
+    assert stats.artifact_posterior == pytest.approx(0.001)
+    assert stats.log_bayes_factor_artifact_vs_variant == 0
+    assert stats.case_counts["alt_forward"] == 0
+    assert stats.normal_counts["non_alt_forward"] == 0
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reasons"),
+    [
+        ({}, ()),
+        ({"min_case_depth": 5}, ("CASE_DEPTH",)),
+        ({"min_normal_depth": 9}, ("NORMAL_DEPTH",)),
+        ({"min_normal_samples": 3}, ("NORMAL_SAMPLE_COUNT",)),
+        ({"min_case_strand_depth": 3}, ("CASE_STRAND_DEPTH",)),
+        ({"min_normal_strand_depth": 5}, ("NORMAL_STRAND_DEPTH",)),
+    ],
+)
+def test_assessment_thresholds_are_inclusive_and_do_not_change_scores(overrides, reasons) -> None:
+    limits = dict(
+        min_case_depth=4, min_normal_depth=8, min_normal_samples=2,
+        min_case_strand_depth=2, min_normal_strand_depth=4,
+    )
+    limits.update(overrides)
+    case = _evidence(1, 1, 1, 1)
+    normal = _evidence(0, 0, 4, 4)
+    samples = [_evidence(0, 0, 2, 2), _evidence(0, 0, 2, 2)]
+    baseline = skua.compute_stats(case, normal, per_sample_evidences=samples)
+    stats = skua.compute_stats(
+        case, normal, per_sample_evidences=samples,
+        assessment_thresholds=skua.AssessmentThresholds(**limits),
+    )
+    assert stats.assessment_status == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
+    assert stats.assessment_reasons == reasons
+    assert stats.artifact_posterior == baseline.artifact_posterior
+    assert stats.log_bayes_factor_artifact_vs_variant == baseline.log_bayes_factor_artifact_vs_variant
+
+
+@pytest.mark.parametrize("name", [
+    "min_case_depth", "min_normal_depth", "min_normal_samples",
+    "min_case_strand_depth", "min_normal_strand_depth",
+])
+@pytest.mark.parametrize("value", [-1, 1.5, float("nan"), float("inf"), True])
+def test_invalid_assessment_thresholds_are_rejected(name, value) -> None:
+    with pytest.raises(ValueError, match=name):
+        skua.compute_stats(
+            _evidence(), _evidence(),
+            assessment_thresholds=skua.AssessmentThresholds(**{name: value}),
+        )
+
+
+@pytest.mark.parametrize("name", ["min_case_depth", "min_normal_depth"])
+def test_zero_evidence_cannot_be_enabled_by_lowering_thresholds(name) -> None:
+    with pytest.raises(ValueError, match=name):
+        skua.compute_stats(
+            _evidence(), _evidence(),
+            assessment_thresholds=skua.AssessmentThresholds(**{name: 0}),
+        )
+
+
+def _write_bam(path, sample, counts) -> None:
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": "chr1", "LN": 1000}],
+        "RG": [{"ID": "rg1", "SM": sample}],
+    }
+    with pysam.AlignmentFile(str(path), "wb", header=header) as bam:
+        for channel, count in enumerate((*counts, 1)):
+            for index in range(count):
+                read = pysam.AlignedSegment()
+                read.query_name = f"{channel}-{index}"
+                read.query_sequence = "AAAAATAAAA" if channel < 2 else "AAAAAAAAAA"
+                read.flag = 147 if channel % 2 else 99
+                read.reference_id = 0
+                read.reference_start = 100
+                read.mapping_quality = 0 if channel == 4 else 60
+                read.cigartuples = [(0, 10)]
+                read.next_reference_id = 0
+                read.next_reference_start = 100
+                read.query_qualities = pysam.qualitystring_to_array("I" * 10)
+                read.set_tag("RG", "rg1")
+                bam.write(read)
+    pysam.index(str(path))
+
+
+def _write_inputs(tmp_path, case, normals):
+    targets = tmp_path / "targets.vcf"
+    targets.write_text(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t106\t.\tA\tT\t.\tPASS\t.\n",
+    )
+    case_path = tmp_path / "case.bam"
+    _write_bam(case_path, "CASE", case)
+    normal_paths = []
+    for index, counts in enumerate(normals):
+        path = tmp_path / f"normal{index}.bam"
+        _write_bam(path, f"NORMAL{index}", counts)
+        normal_paths.append(path)
+    normal_list = tmp_path / "normals.lst"
+    normal_list.write_text("".join(f"{path}\n" for path in normal_paths))
+    return targets, case_path, normal_paths, normal_list
+
+
+@pytest.mark.parametrize("mode", ["direct", "pon", "vcf-pon"])
+@pytest.mark.parametrize(
+    ("case", "normals", "thresholds", "reasons", "case_depth", "normal_depth", "normal_samples"),
+    [
+        pytest.param((0, 0, 0, 0), [(0, 0, 0, 0)], {},
+                     ("CASE_DEPTH", "NORMAL_DEPTH"), 0, 0, 0, id="zero-evidence"),
+        pytest.param((0, 0, 0, 0), [(0, 0, 2, 2)], {},
+                     ("CASE_DEPTH",), 0, 4, 1, id="zero-case"),
+        pytest.param((1, 1, 1, 1), [(0, 0, 0, 0)], {},
+                     ("NORMAL_DEPTH",), 4, 0, 0, id="zero-normal"),
+        pytest.param((1, 1, 1, 1), [(2, 2, 0, 0)], {},
+                     ("NORMAL_DEPTH",), 4, 0, 0, id="all-truncated"),
+        pytest.param((2, 0, 0, 0), [(0, 0, 4, 0)], {},
+                     (), 2, 4, 1, id="one-strand-default"),
+        pytest.param((2, 0, 0, 0), [(0, 0, 4, 0)],
+                     {"min_case_strand_depth": 1, "min_normal_strand_depth": 1},
+                     ("CASE_STRAND_DEPTH", "NORMAL_STRAND_DEPTH"), 2, 4, 1, id="one-strand-required"),
+        pytest.param((1, 1, 1, 1), [(0, 0, 2, 2), (0, 0, 2, 2)],
+                     dict(min_case_depth=4, min_normal_depth=8, min_normal_samples=2,
+                          min_case_strand_depth=2, min_normal_strand_depth=4),
+                     (), 4, 8, 2, id="exact-boundaries"),
+        pytest.param((1, 1, 1, 1), [(0, 0, 2, 2), (2, 2, 0, 0)],
+                     dict(min_case_depth=5, min_normal_depth=5, min_normal_samples=2,
+                          min_case_strand_depth=3, min_normal_strand_depth=3),
+                     ("CASE_DEPTH", "NORMAL_DEPTH", "NORMAL_SAMPLE_COUNT",
+                      "CASE_STRAND_DEPTH", "NORMAL_STRAND_DEPTH"),
+                     4, 4, 1, id="below-all-boundaries-after-truncation"),
+    ],
+)
+def test_cli_assessment_preserves_counts_and_scores(
+    tmp_path, mode, case, normals, thresholds, reasons, case_depth, normal_depth, normal_samples,
+) -> None:
+    targets, case_path, normal_paths, normal_list = _write_inputs(tmp_path, case, normals)
+    output = tmp_path / "calls.vcf"
+    args = [
+        "annotate", "--alignment", str(case_path), "--output", str(output),
+        "--prior-artifact-probability", "0.001",
+    ]
+    if mode == "direct":
+        args += ["--vcf", str(targets), "--normal-list", str(normal_list)]
+    else:
+        panel = tmp_path / "panel.bcf"
+        assert main([
+            "pon", "build", "--vcf", str(targets), "--normal-list", str(normal_list),
+            "--output", str(panel),
+        ]) == 0
+        args += ["--pon", str(panel)]
+        if mode == "vcf-pon":
+            args += ["--vcf", str(targets)]
+    for name, value in thresholds.items():
+        args += [f"--{name.replace('_', '-')}", str(value)]
+    assert main(args) == 0
+    with pysam.VariantFile(str(output)) as vcf:
+        record = next(vcf)
+        sample = record.samples["CASE"]
+        assert record.info["SKUA_STATUS"] == "ANNOTATED"
+        assert sample["SKUA_ASSESSMENT_STATUS"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
+        assert sample["SKUA_ASSESSMENT_REASONS"] == (reasons or (".",))
+        assert sample["SKUA_USABLE"] == case_depth
+        assert sample["SKUA_UNUSABLE"] == 1
+        assert record.info["SKUA_PON_SAMPLE_COUNT"] == normal_samples
+        assert record.info["SKUA_PON_USABLE"] == normal_depth
+        assert record.info["SKUA_PON_UNUSABLE"] == normal_samples
+        assert sample["SKUA_ARTIFACT_POSTERIOR"] is not None
+        assert sample["SKUA_LOG_BAYES_FACTOR"] is not None
+        if case_depth == 0:
+            assert sample["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(0.001)
+
+    with ExitStack() as stack:
+        alignment = stack.enter_context(pysam.AlignmentFile(str(case_path)))
+        normal_alignments = [
+            stack.enter_context(pysam.AlignmentFile(str(path))) for path in normal_paths
+        ]
+        [row] = json.loads(skua.annotate_vcf_to_json_with_normals(
+            alignment, targets, normal_alignments=normal_alignments,
+            prior_artifact_probability=0.001,
+            assessment_thresholds=skua.AssessmentThresholds(**thresholds),
+        ))
+    assert row["stats"]["assessment_status"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
+    assert row["stats"]["assessment_reasons"] == list(reasons)
+    assert row["counts"]["case"]["usable"] == case_depth
+    assert row["counts"]["case"]["unusable"] == 1
+    assert row["counts"]["normal"]["usable"] == normal_depth
+    assert row["stats"]["pon_sample_count"] == normal_samples
+    # Text VCF serialization retains fewer significant digits than JSON.
+    assert row["stats"]["artifact_posterior"] == pytest.approx(
+        sample["SKUA_ARTIFACT_POSTERIOR"], rel=1e-5,
+    )
+
+
+@pytest.mark.parametrize("samples", [[], [_evidence(2, 2)]])
+def test_stats_checks_retained_normals_even_when_supplied_aggregate_has_depth(samples) -> None:
+    stats = skua.compute_stats(
+        _evidence(1, 1), _evidence(0, 0, 20, 20), per_sample_evidences=samples,
+        assessment_thresholds=skua.AssessmentThresholds(min_normal_samples=1),
+    )
+    assert stats.assessment_status == "INSUFFICIENT_EVIDENCE"
+    assert stats.assessment_reasons == ("NORMAL_DEPTH", "NORMAL_SAMPLE_COUNT")
+    assert stats.normal_counts == {
+        "alt_forward": 0, "alt_reverse": 0, "non_alt_forward": 0, "non_alt_reverse": 0,
+    }
+
+
+def test_aggregate_only_stats_cannot_claim_to_meet_a_sample_count_requirement() -> None:
+    case, normal = _evidence(1, 1), _evidence(0, 0, 20, 20)
+    assert skua.compute_stats(case, normal).assessment_status == "ASSESSED"
+    stats = skua.compute_stats(
+        case, normal, assessment_thresholds=skua.AssessmentThresholds(min_normal_samples=2),
+    )
+    assert stats.assessment_status == "INSUFFICIENT_EVIDENCE"
+    assert stats.assessment_reasons == ("NORMAL_SAMPLE_COUNT_UNAVAILABLE",)
+
+
+@pytest.mark.parametrize("source", ["--normal-list", "--pon"])
+@pytest.mark.parametrize(("option", "value"), [
+    ("min-case-depth", "0"), ("min-normal-depth", "0"), ("min-normal-samples", "-1"),
+    ("min-case-strand-depth", "-1"), ("min-normal-strand-depth", "-1"),
+    ("min-case-depth", "1.5"),
+])
+def test_invalid_cli_thresholds_preserve_existing_output_and_indexes(tmp_path, capsys, source, option, value):
+    output = tmp_path / "calls.vcf.gz"
+    protected = [output, tmp_path / "calls.vcf.gz.tbi", tmp_path / "calls.vcf.gz.csi"]
+    for path in protected:
+        path.write_bytes(b"existing output or index")
+    with pytest.raises(SystemExit) as error:
+        main([
+            "annotate", "--vcf", "not-opened.vcf", "--alignment", "not-opened.bam",
+            source, "not-opened-panel", "--output", str(output), "--force",
+            f"--{option}={value}",
+        ])
+    assert error.value.code == 2
+    assert f"--{option}" in capsys.readouterr().err
+    assert all(path.read_bytes() == b"existing output or index" for path in protected)
+
+
+@pytest.mark.parametrize("cached", [False, True], ids=["direct", "vcf-pon"])
+def test_force_replaces_assessment_and_leaves_unsupported_and_other_samples_unassessed(tmp_path, cached):
+    targets, case_path, _, normal_list = _write_inputs(
+        tmp_path, (1, 1, 1, 1), [(0, 0, 2, 2)],
+    )
+    source_args = ["--normal-list", str(normal_list)]
+    if cached:
+        panel = tmp_path / "panel.bcf"
+        assert main([
+            "pon", "build", "--vcf", str(targets), "--normal-list", str(normal_list),
+            "--output", str(panel),
+        ]) == 0
+        source_args = ["--pon", str(panel)]
+    candidates = tmp_path / "candidates.vcf"
+    candidates.write_text(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        '##FORMAT=<ID=SKUA_ASSESSMENT_STATUS,Number=1,Type=String,Description="Old">\n'
+        '##FORMAT=<ID=SKUA_ASSESSMENT_REASONS,Number=.,Type=String,Description="Old">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tOTHER\n"
+        "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
+        "\t0/1:INSUFFICIENT_EVIDENCE:CASE_DEPTH\t0/0:ASSESSED:.\n"
+        "chr1\t206\t.\tA\t<DEL>\t.\tPASS\t.\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
+        "\t0/1:ASSESSED:.\t0/0:ASSESSED:.\n",
+    )
+    output = tmp_path / "calls.vcf"
+    assert main([
+        "annotate", "--vcf", str(candidates), "--alignment", str(case_path),
+        "--output", str(output), "--force", *source_args,
+    ]) == 0
+    with pysam.VariantFile(str(output)) as vcf:
+        supported, unsupported = list(vcf)
+        assert supported.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
+        assert supported.samples["CASE"]["SKUA_ASSESSMENT_REASONS"] == (".",)
+        assert supported.samples["OTHER"].get("SKUA_ASSESSMENT_STATUS") in (None, ".")
+        assert unsupported.info["SKUA_STATUS"] == "UNSUPPORTED_SYMBOLIC_ALLELE"
+        assert "SKUA_ASSESSMENT_STATUS" not in unsupported.format
+        assert "SKUA_ASSESSMENT_REASONS" not in unsupported.format
+        assert "SKUA_ARTIFACT_POSTERIOR" not in unsupported.format
+        assert unsupported.samples["CASE"]["GT"] == (0, 1)
+        assert unsupported.samples["OTHER"]["GT"] == (0, 0)

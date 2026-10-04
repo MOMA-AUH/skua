@@ -16,6 +16,7 @@ from .core import (
     build_pon,
 )
 from .pon import PonInspection, inspect_pon, validate_pon
+from .stats import AssessmentThresholds
 
 
 class OptionalDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -78,6 +79,18 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         default=0.5,
         help="Fallback artifact prior when SKUA_ARTIFACT_PRIOR is missing",
     )
+    defaults = AssessmentThresholds()
+    for name, description in (
+        ("min_case_depth", "Minimum usable case depth for assessment"),
+        ("min_normal_depth", "Minimum pooled normal usable depth after truncation"),
+        ("min_normal_samples", "Minimum retained normals; 0 disables this requirement"),
+        ("min_case_strand_depth", "Minimum usable case depth on each strand; 0 disables"),
+        ("min_normal_strand_depth", "Minimum pooled normal depth on each strand after truncation; 0 disables"),
+    ):
+        parser.add_argument(
+            "--" + name.replace("_", "-"), type=int,
+            default=getattr(defaults, name), help=description,
+        )
 
 
 def _validate_parameters(
@@ -97,6 +110,14 @@ def _validate_parameters(
                 args.prior_artifact_probability if include_model else None
             ),
         )
+        if include_model:
+            args.assessment_thresholds = AssessmentThresholds(
+                min_case_depth=args.min_case_depth,
+                min_normal_depth=args.min_normal_depth,
+                min_normal_samples=args.min_normal_samples,
+                min_case_strand_depth=args.min_case_strand_depth,
+                min_normal_strand_depth=args.min_normal_strand_depth,
+            )
     except ValueError as exc:
         parser.error(f"--{str(exc).replace('_', '-')}")
 
@@ -132,6 +153,7 @@ def _pon_model_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "truncate": args.truncate,
         "prior_artifact_probability": args.prior_artifact_probability,
+        "assessment_thresholds": args.assessment_thresholds,
     }
     if args.pseudocount is not None:
         kwargs["pseudocount"] = args.pseudocount
@@ -311,7 +333,7 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     sample_name=args.sample,
                     reference_path=args.reference,
                     strict=args.strict,
-                    **({"force": True} if args.force else {}),
+                    force=args.force,
                     **_pon_model_kwargs(args),
                 )
             else:
@@ -333,7 +355,7 @@ def _run_annotate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     strict=args.strict,
                     min_baseq=min_baseq,
                     min_mapq=min_mapq,
-                    **({"force": True} if args.force else {}),
+                    force=args.force,
                     **_pon_model_kwargs(args),
                 )
         except (FileExistsError, ValueError) as exc:

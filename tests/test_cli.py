@@ -3,7 +3,7 @@ import json
 import pytest
 
 import skua.cli as cli
-from skua import __version__
+from skua import AssessmentThresholds, __version__
 from skua.pon import PonInspection, PonValidationResult
 
 
@@ -215,6 +215,8 @@ def test_main_annotate_with_precomputed_pon_counts_only_case(monkeypatch, tmp_pa
             "strict": False,
             "truncate": 0.1,
             "prior_artifact_probability": 0.3,
+            "assessment_thresholds": AssessmentThresholds(),
+            "force": False,
         }
     ]
 
@@ -270,6 +272,8 @@ def test_main_annotate_with_vcf_and_precomputed_pon_forwards_both_inputs(
             "strict": True,
             "truncate": 0.1,
             "prior_artifact_probability": 0.5,
+            "assessment_thresholds": AssessmentThresholds(),
+            "force": False,
         }
     ]
 
@@ -473,6 +477,8 @@ def test_main_annotate_with_normal_uses_pon_functions(monkeypatch, capsys, tmp_p
             "min_mapq": 20,
             "truncate": 0.1,
             "prior_artifact_probability": 0.5,
+            "assessment_thresholds": AssessmentThresholds(),
+            "force": False,
         }
     ]
     captured = capsys.readouterr()
@@ -555,6 +561,8 @@ def test_main_annotate_with_normal_uses_output_path_and_does_not_print(
             "min_mapq": 12,
             "truncate": 0.1,
             "prior_artifact_probability": 0.5,
+            "assessment_thresholds": AssessmentThresholds(),
+            "force": False,
         }
     ]
     captured = capsys.readouterr()
@@ -670,6 +678,8 @@ def test_main_annotate_accepts_alignment_path_for_cram(monkeypatch, capsys, tmp_
             "min_mapq": 20,
             "truncate": 0.1,
             "prior_artifact_probability": 0.5,
+            "assessment_thresholds": AssessmentThresholds(),
+            "force": False,
             "reference_path": "ref.fa",
             "normal_count": 1,
         }

@@ -1,6 +1,7 @@
 """Statistical helpers for strand-aware PON evaluation."""
 
 from dataclasses import dataclass
+from enum import Enum
 import math
 import sys
 
@@ -54,9 +55,75 @@ def _validate_model_parameters(
         raise ValueError("prior_artifact_probability must be finite and between 0 and 1")
 
 
+class AssessmentStatus(str, Enum):
+    """Whether the available evidence meets the configured assessment policy."""
+
+    ASSESSED = "ASSESSED"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+@dataclass(frozen=True)
+class AssessmentThresholds:
+    """Inclusive usable-depth minima; zero disables sample/strand requirements.
+
+    Defaults only exclude absent case or normal evidence. They are not
+    assay-validated coverage requirements. Normal limits apply after truncation.
+    """
+
+    min_case_depth: int = 1
+    min_normal_depth: int = 1
+    min_normal_samples: int = 0
+    min_case_strand_depth: int = 0
+    min_normal_strand_depth: int = 0
+
+    def __post_init__(self) -> None:
+        for name, minimum in (
+            ("min_case_depth", 1),
+            ("min_normal_depth", 1),
+            ("min_normal_samples", 0),
+            ("min_case_strand_depth", 0),
+            ("min_normal_strand_depth", 0),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
+def _assessment_reasons(
+    case: AggregatedEvidence,
+    normal: AggregatedEvidence,
+    normal_sample_count: int | None,
+    thresholds: AssessmentThresholds,
+) -> tuple[str, ...]:
+    case_forward = case.alt_forward + case.non_alt_forward
+    case_reverse = case.alt_reverse + case.non_alt_reverse
+    normal_forward = normal.alt_forward + normal.non_alt_forward
+    normal_reverse = normal.alt_reverse + normal.non_alt_reverse
+    reasons = []
+    if case_forward + case_reverse < thresholds.min_case_depth:
+        reasons.append("CASE_DEPTH")
+    if normal_forward + normal_reverse < thresholds.min_normal_depth:
+        reasons.append("NORMAL_DEPTH")
+    if thresholds.min_normal_samples > 0:
+        if normal_sample_count is None:
+            reasons.append("NORMAL_SAMPLE_COUNT_UNAVAILABLE")
+        elif normal_sample_count < thresholds.min_normal_samples:
+            reasons.append("NORMAL_SAMPLE_COUNT")
+    if min(case_forward, case_reverse) < thresholds.min_case_strand_depth:
+        reasons.append("CASE_STRAND_DEPTH")
+    if min(normal_forward, normal_reverse) < thresholds.min_normal_strand_depth:
+        reasons.append("NORMAL_STRAND_DEPTH")
+    return tuple(reasons)
+
+
 @dataclass(frozen=True)
 class Stats:
-    """Typed strand-aware summary for case vs panel-of-normals background."""
+    """Case/PON summary with eligibility separate from retained numeric scores.
+
+    ``assessment_reasons`` lists all unmet requirements, or is empty when
+    ``assessment_status`` is ASSESSED. Ineligible scores must not be treated
+    as evidence-supported assessments.
+    """
 
     case_counts: dict[str, int]
     normal_counts: dict[str, int]
@@ -66,6 +133,8 @@ class Stats:
     artifact_posterior: float
     dispersion_rho: float
     pseudocount: float
+    assessment_status: AssessmentStatus
+    assessment_reasons: tuple[str, ...]
 
 
 def _bound(value: float, lower: float, upper: float) -> float:
@@ -242,6 +311,7 @@ def compute_stats(
     prior_artifact_probability: float = 0.5,
     mu_min: float = 1e-6,
     mu_max: float = 1 - 1e-6,
+    assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
 ) -> Stats:
     """Compute a Shearwater-style beta-binomial Bayes-factor summary.
 
@@ -253,6 +323,13 @@ def compute_stats(
     When ``per_sample_evidences`` is supplied, rho is estimated from the
     per-sample PON evidence using the Shearwater method-of-moments estimator
     (``estimate_rho``), replacing the fixed ``rho`` default.
+    The retained per-sample pool also replaces ``normal_evidence`` for counts,
+    background summaries, scoring, and eligibility, including for an empty list.
+
+    ``assessment_thresholds`` controls eligibility, never the numeric scores.
+    Defaults exclude zero case/normal depth without imposing assay-specific
+    sample-count or strand requirements. An aggregate-only pool cannot satisfy
+    a positive minimum sample count: its reason is NORMAL_SAMPLE_COUNT_UNAVAILABLE.
 
     All parameters must be finite, with pseudocount > 0, 0 < truncate <= 1,
     0 < rho < 1, 0 < prior_artifact_probability < 1, and
@@ -267,8 +344,12 @@ def compute_stats(
     if not math.isfinite(rho) or not 0.0 < rho < 1.0:
         raise ValueError("rho must be finite and between 0 and 1")
     _validate_probability_bounds(mu_min, mu_max, lower_name="mu_min", upper_name="mu_max")
+    normal_sample_count = None
     if per_sample_evidences is not None:
         rho = estimate_rho(per_sample_evidences, truncate=truncate)
+        retained_normals = truncated_normal_evidences(per_sample_evidences, truncate=truncate)
+        normal_sample_count = len(retained_normals)
+        normal_evidence = aggregate_evidence(retained_normals)
     case_counts = {
         "alt_forward": case_evidence.alt_forward,
         "alt_reverse": case_evidence.alt_reverse,
@@ -303,17 +384,6 @@ def compute_stats(
     X_bw = normal_counts["alt_reverse"]
     N_fw = X_fw + normal_counts["non_alt_forward"]
     N_bw = X_bw + normal_counts["non_alt_reverse"]
-
-    if per_sample_evidences:
-        masked = truncated_normal_evidences(
-            per_sample_evidences,
-            truncate=truncate,
-        )
-        masked_aggregate = aggregate_evidence(masked)
-        X_fw = masked_aggregate.alt_forward
-        X_bw = masked_aggregate.alt_reverse
-        N_fw = masked_aggregate.alt_forward + masked_aggregate.non_alt_forward
-        N_bw = masked_aggregate.alt_reverse + masked_aggregate.non_alt_reverse
 
     if case_total == 0:
         log_bayes_factor = 0.0
@@ -375,6 +445,9 @@ def compute_stats(
         exp_delta = math.exp(log_posterior_odds_artifact)
         artifact_posterior = exp_delta / (1.0 + exp_delta)
 
+    assessment_reasons = _assessment_reasons(
+        case_evidence, normal_evidence, normal_sample_count, assessment_thresholds,
+    )
     return Stats(
         case_counts=case_counts,
         normal_counts=normal_counts,
@@ -384,4 +457,9 @@ def compute_stats(
         artifact_posterior=artifact_posterior,
         dispersion_rho=rho,
         pseudocount=pseudocount,
+        assessment_status=(
+            AssessmentStatus.INSUFFICIENT_EVIDENCE
+            if assessment_reasons else AssessmentStatus.ASSESSED
+        ),
+        assessment_reasons=assessment_reasons,
     )
