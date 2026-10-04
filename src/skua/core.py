@@ -47,7 +47,7 @@ from .stats import (
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, write_reference_header
 from ._version import __version__
-from .provenance import PROVENANCE_HEADER_KEY, evidence_provenance, write_run_summary_header
+from .run_summary import RUN_SUMMARY_SCHEMA_VERSION, evidence_summary, write_run_summary_header
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -595,7 +595,7 @@ def _validate_no_existing_skua_annotations(
         if (
             record.key.startswith("SKUA_")
             and not (allow_pon_storage and record.key in {
-                PON_HEADER_KEY, "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS", PROVENANCE_HEADER_KEY,
+                PON_HEADER_KEY, "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS",
             })
             and record.key not in existing_annotations
         ):
@@ -947,8 +947,8 @@ def _run_summary(
 ) -> dict[str, Any]:
     """Record effective settings without input identities or file reads."""
     return {
-        "schema_version": 2, "skua_version": __version__, "mode": mode,
-        "evidence": evidence_provenance(
+        "schema_version": RUN_SUMMARY_SCHEMA_VERSION, "skua_version": __version__, "mode": mode,
+        "evidence": evidence_summary(
             EVIDENCE_POLICY_VERSION, min_baseq, min_mapq,
             normal_read_groups=normal_read_groups,
         ),
@@ -1935,8 +1935,8 @@ def _json_run_summary(
     return summary
 
 
-def _render_annotation_document(rows: Iterable[dict[str, Any]], provenance: dict[str, Any]) -> str:
-    return json.dumps({"provenance": provenance, "records": list(rows)}, indent=2, allow_nan=False)
+def _render_annotation_document(rows: Iterable[dict[str, Any]], run_summary: dict[str, Any]) -> str:
+    return json.dumps({"run_summary": run_summary, "records": list(rows)}, indent=2, allow_nan=False)
 
 
 def annotate_vcf_to_json(
@@ -1947,19 +1947,19 @@ def annotate_vcf_to_json(
     min_baseq: int = 20,
     min_mapq: int = 20,
 ) -> str:
-    """Return a JSON document with provenance and records, optionally writing it to file."""
+    """Return a JSON document with a run summary and records, optionally writing it to file."""
     rows = _build_annotation_rows(
         alignment_file,
         vcf_path,
         min_baseq=min_baseq,
         min_mapq=min_mapq,
     )
-    provenance = _json_run_summary(
+    run_summary = _json_run_summary(
         alignment_file, vcf_path, normal_alignments=[], min_baseq=min_baseq, min_mapq=min_mapq, model=None,
     )
     return _render_and_optionally_write(
         rows,
-        renderer=lambda values: _render_annotation_document(values, provenance),
+        renderer=lambda values: _render_annotation_document(values, run_summary),
         output_path=output_path,
     )
 
@@ -2166,7 +2166,7 @@ def annotate_vcf_to_json_with_normals(
     prior_artifact_probability: float = 0.5,
     assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
 ) -> str:
-    """Return normal-model records and provenance, retaining the evidence API's constant prior."""
+    """Return normal-model records and a run summary, retaining the evidence API's constant prior."""
     if normal_alignments is None:
         normal_alignments = []
 
@@ -2183,7 +2183,7 @@ def annotate_vcf_to_json_with_normals(
     )
     for row in rows:
         row["artifact_prior"] = prior_artifact_probability
-    provenance = _json_run_summary(
+    run_summary = _json_run_summary(
         alignment_file, vcf_path, normal_alignments=normal_alignments,
         min_baseq=min_baseq, min_mapq=min_mapq,
         model=_model_summary(
@@ -2192,6 +2192,6 @@ def annotate_vcf_to_json_with_normals(
     )
     return _render_and_optionally_write(
         rows,
-        renderer=lambda values: _render_annotation_document(values, provenance),
+        renderer=lambda values: _render_annotation_document(values, run_summary),
         output_path=output_path,
     )

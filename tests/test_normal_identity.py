@@ -201,20 +201,20 @@ def test_duplicates_are_rejected_even_without_sample_metadata(tmp_path, duplicat
 def test_schema_two_panel_with_old_normal_policy_requires_rebuild(tmp_path):
     vcf = targets(tmp_path / "targets.vcf")
     panel = tmp_path / "panel.bcf"
-    legacy = tmp_path / "old-policy.bcf"
+    incompatible = tmp_path / "old-policy.bcf"
     with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
         build_pon(vcf, normal_alignments=[normal], output_path=panel)
     serialized = bcftools.view("-Ov", str(panel))
     old = serialized.replace('EvidencePolicyVersion="6"', 'EvidencePolicyVersion="4"')
     assert old != serialized
     (tmp_path / "old.vcf").write_text(old)
-    bcftools.view("-Ob", "-o", str(legacy), str(tmp_path / "old.vcf"), catch_stdout=False)
-    bcftools.index(str(legacy))
-    assert inspect_pon(legacy).evidence_policy_version == "4"
-    assert not validate_pon(legacy).valid
+    bcftools.view("-Ob", "-o", str(incompatible), str(tmp_path / "old.vcf"), catch_stdout=False)
+    bcftools.index(str(incompatible))
+    assert inspect_pon(incompatible).evidence_policy_version == "4"
+    assert not validate_pon(incompatible).valid
     with pytest.raises(ValueError, match="evidence policy.*rebuild"):
-        read_pon_metadata(legacy)
+        read_pon_metadata(incompatible)
     with alignment(tmp_path / "case.bam", "CASE") as case:
         with pytest.raises(ValueError, match="evidence policy.*rebuild"):
-            annotate_vcf_with_pon(case, legacy, output_path=tmp_path / "out.vcf")
+            annotate_vcf_with_pon(case, incompatible, output_path=tmp_path / "out.vcf")
     assert not (tmp_path / "out.vcf").exists()

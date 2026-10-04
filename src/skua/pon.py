@@ -19,7 +19,6 @@ from ._output import (
 from .evidence import AggregatedEvidence
 from .variants import Variant
 from .reference import ReferenceIdentity, check_reference_compatibility, read_reference_header, write_reference_header
-from .provenance import PROVENANCE_HEADER_KEY, RUN_HEADER_KEY, evidence_provenance, read_provenance_header
 
 
 PON_SCHEMA_VERSION = 2
@@ -48,7 +47,7 @@ _EVIDENCE_ATTRIBUTES_BY_FIELD = {
 
 @dataclass(frozen=True)
 class PonArtifactMetadata:
-    """Provenance required to interpret a precomputed PON artifact."""
+    """Metadata required to interpret a precomputed PON artifact."""
 
     schema_version: int
     evidence_policy_version: int
@@ -57,7 +56,6 @@ class PonArtifactMetadata:
     skua_version: str
     sample_names: tuple[str, ...]
     reference_identity: ReferenceIdentity
-    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -75,7 +73,6 @@ class PonInspection:
     skua_version: str | None
     sample_names: tuple[str, ...]
     reference_identity: ReferenceIdentity | None = None
-    provenance: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, object]:
         """Return a JSON-ready representation of this inspection."""
@@ -93,7 +90,6 @@ class PonInspection:
             "sample_names": list(self.sample_names),
             "reference_status": None if self.reference_identity is None else self.reference_identity.status,
             "reference_identity": None if self.reference_identity is None else self.reference_identity.as_dict(),
-            "provenance": self.provenance,
         }
 
 
@@ -119,12 +115,12 @@ class PonValidationResult:
 
 
 def _metadata_records(header: Any) -> list[Any]:
-    """Return every PON provenance record found in a VCF header."""
+    """Return every PON metadata record found in a VCF header."""
     return [record for record in header.records if record.key == PON_HEADER_KEY]
 
 
 def _metadata_items_from_record(record: Any) -> dict[str, str]:
-    """Return normalized metadata values from one PON provenance record."""
+    """Return normalized metadata values from one PON metadata record."""
     return {
         key: unquote_header_value(value)
         for key, value in record.items()
@@ -149,10 +145,6 @@ def inspect_pon(path: str | Path) -> PonInspection:
             reference_identity = read_reference_header(pon_file.header)
         except ValueError:
             reference_identity = None
-        try:
-            provenance = read_provenance_header(pon_file.header)
-        except ValueError:
-            provenance = None
         metadata_records = _metadata_records(pon_file.header)
         metadata = (
             _metadata_items_from_record(metadata_records[0])
@@ -171,7 +163,6 @@ def inspect_pon(path: str | Path) -> PonInspection:
             skua_version=metadata.get("SkuaVersion"),
             sample_names=tuple(pon_file.header.samples),
             reference_identity=reference_identity,
-            provenance=provenance,
         )
 
 
@@ -234,31 +225,6 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         (contig.name for contig in reference_identity.contigs), alignment_files=[],
         pon_reference=reference_identity, vcf_header=header,
     )
-    provenance = read_provenance_header(header)
-    if provenance is not None:
-        expected = {
-            "mode": "pon_build", "skua_version": items["SkuaVersion"],
-            "normal_samples": list(sample_names), "reference": reference_identity.as_dict(),
-            "evidence": evidence_provenance(evidence_policy_version, min_baseq, min_mapq),
-        }
-        for key, value in expected.items():
-            if provenance.get(key) != value:
-                raise ValueError(f"PON provenance {key} contradicts its artifact metadata")
-        selections = provenance.get("normal_selections")
-        if selections is not None:
-            if not isinstance(selections, list) or len(selections) != len(sample_names):
-                raise ValueError("PON provenance normal selections do not match sample membership")
-            for sample, selection in zip(sample_names, selections, strict=True):
-                if not isinstance(selection, dict):
-                    raise ValueError("Invalid PON provenance normal selection")
-                groups = selection.get("read_group_ids")
-                if (
-                    selection.get("sample_name") != sample or selection.get("selection") != "read_groups"
-                    or not isinstance(groups, list) or not groups
-                    or not all(isinstance(group, str) and group for group in groups)
-                    or len(set(groups)) != len(groups)
-                ):
-                    raise ValueError("PON provenance normal selection contradicts its evidence policy")
     return PonArtifactMetadata(
         schema_version=schema_version,
         evidence_policy_version=evidence_policy_version,
@@ -267,7 +233,6 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         skua_version=items["SkuaVersion"],
         sample_names=sample_names,
         reference_identity=reference_identity,
-        provenance=provenance,
     )
 
 
@@ -533,7 +498,7 @@ def _add_pon_header_fields(
             for field_id in fields
             if field_id.startswith("SKUA_")
             and field_id != _ARTIFACT_PRIOR_FIELD_ID
-        }
+        } | {record.key for record in header.records if record.key.startswith("SKUA_")}
     )
     if other_skua_fields:
         raise ValueError(
@@ -635,7 +600,6 @@ def write_pon_artifact(
             )
             _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
             write_reference_header(header, reference_identity)
-            remove_header_records(header, (PROVENANCE_HEADER_KEY, RUN_HEADER_KEY))
             for sample_name in sample_names:
                 header.add_sample(sample_name)
 

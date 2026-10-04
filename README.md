@@ -420,14 +420,14 @@ errors. Structural validity does not imply verified reference identity.
 #### Run summary and PON metadata
 
 Annotated VCFs contain one human-readable `SKUA_RUN` header record with
-`SchemaVersion=2`. It records the Skua version, mode, evidence-policy version,
+`SchemaVersion=1`. It records the Skua version, mode, evidence-policy version,
 effective base/mapping-quality thresholds, MAPQ-255 exclusion, and read-selection
 policies. Normal-model runs also record truncation, pseudocount, prior policy
 and fallback, and all five assessment thresholds. For example, a case-only run
 with default quality thresholds writes:
 
 ```text
-##SKUA_RUN=<SchemaVersion="2",SkuaVersion="0.7.3",Mode="case_only",EvidencePolicyVersion="6",MinBaseQ="20",MinMapQ="20",MapQ255="exclude",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
+##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.7.3",Mode="case_only",EvidencePolicyVersion="6",MinBaseQ="20",MinMapQ="20",MapQ255="exclude",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
 
 `SkuaVersion` reflects the installed version. Cached annotation records the
@@ -436,24 +436,19 @@ prior in `INFO/SKUA_ARTIFACT_PRIOR`; `PriorPolicy=record_info_then_fallback`
 identifies the selection rule and `PriorFallback` records its fallback value.
 The existing reference metadata and per-variant annotations remain unchanged.
 
-Skua no longer writes the base64 `SKUA_PROVENANCE` document. The summary contains
-no input paths or filenames, input-file hashes or sizes, sample names, read-group
-IDs, or embedded PON build history. It adds no full-file checksum reads. Exact
+The summary contains no input paths or filenames, input-file hashes or sizes,
+sample names, read-group IDs, or embedded PON build history. It adds no full-file checksum reads. Exact
 input traceability belongs in your workflow records; Skua does not create a
 separate manifest. Reference sequence checksums used by reference compatibility
 checks are unchanged.
 
-New PONs retain `SKUA_PON` compatibility metadata, reference metadata, normal
-sample columns, and per-normal evidence. These normal identities are still
+PONs contain `SKUA_PON` compatibility metadata, reference metadata, normal
+sample columns, and per-normal evidence. These normal identities are
 required for membership checks and are not copied into annotated VCF metadata.
-PON schema 2 and evidence policy 6 are unchanged: compatible existing PONs work
-with or without a legacy provenance document. If present, legacy build provenance
-is still validated and is available through `skua pon inspect panel.bcf --json`.
-`skua.read_provenance(path)` remains a reader for those older documents; it
-returns `None` for new files, which have no `SKUA_PROVENANCE` record, and rejects
-malformed or unsupported legacy records.
+PON schema 2 and evidence policy 6 define the supported format. Artifacts with
+unsupported versions must be rebuilt from their original targets and alignments.
 
-Forced reannotation replaces both old provenance and previous run summaries.
+Forced reannotation replaces Skua annotations and run summaries.
 Unrelated input VCF headers and sample columns are preserved, including any
 names or paths already written by upstream tools. This change does not anonymize
 an input VCF.
@@ -463,14 +458,11 @@ an input VCF.
 The supported library API is available directly from `skua`. It accepts
 substitutions, MNVs, and left-anchored simple insertions and deletions.
 
-`annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` retain the
-JSON object with `provenance` and `records` keys. The `provenance` value now holds
-the compact summary with `schema_version: 2`, plus the existing reference
-compatibility result. The old `inputs`, `case`, `normal_samples`,
-`normal_selections`, and `options` fields are omitted. Consumers of those old
-metadata fields must update; result rows remain at `json.loads(payload)["records"]`.
-The standalone row formatters and `render_annotation_results_json()` retain
-their list interface.
+`annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` return a
+JSON object with `run_summary` and `records` keys. The summary has
+`schema_version: 1` and includes the reference compatibility result. Read the
+result rows with `json.loads(payload)["records"]`. The standalone row formatters
+and `render_annotation_results_json()` return a list of records.
 
 The JSON wrappers retain their evidence-API semantics: they use all case
 alignment reads without VCF sample selection, recorded as

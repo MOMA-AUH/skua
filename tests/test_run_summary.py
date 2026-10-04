@@ -1,4 +1,3 @@
-import base64
 import builtins
 import hashlib
 import json
@@ -7,17 +6,18 @@ from pathlib import Path
 
 import pysam
 import pytest
-from pysam import bcftools
 
 import skua
-from skua.pon import EVIDENCE_POLICY_VERSION, inspect_pon, validate_pon
+from skua.pon import EVIDENCE_POLICY_VERSION, validate_pon
 from tests.helpers import FakeAlignmentFile, FakeRead, build_linear_pairs
 from tests.test_normal_identity import alignment, targets
 
 
 def read_summary(path):
     with pysam.VariantFile(str(path)) as source:
-        assert not any(r.key == "SKUA_PROVENANCE" for r in source.header.records)
+        assert {r.key for r in source.header.records if r.key.startswith("SKUA_")} == {
+            "SKUA_RUN", "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS",
+        }
         [record] = [r for r in source.header.records if r.key == "SKUA_RUN"]
         return {key: value.strip('"') for key, value in record.items() if key != "IDX"}
 
@@ -53,7 +53,7 @@ def test_live_annotation_records_only_effective_settings(tmp_path, suffix):
         )
     summary = read_summary(output)
     assert summary == {
-        "SchemaVersion": "2", "SkuaVersion": skua.__version__, "Mode": "live_normals",
+        "SchemaVersion": "1", "SkuaVersion": skua.__version__, "Mode": "live_normals",
         "EvidencePolicyVersion": str(EVIDENCE_POLICY_VERSION), "MinBaseQ": "23", "MinMapQ": "31",
         "MapQ255": "exclude", "CaseReadGroups": "assigned_to_sample",
         "NormalReadGroups": "assigned_to_sample", "Truncate": "0.2", "Pseudocount": "0.01",
@@ -62,7 +62,6 @@ def test_live_annotation_records_only_effective_settings(tmp_path, suffix):
         "MinCaseStrandDepth": "1", "MinNormalStrandDepth": "2",
     }
     assert_no_input_details(summary)
-    assert skua.read_provenance(output) is None
     with pysam.VariantFile(str(output)) as annotated:
         assert "PRIVATE_NORMAL" not in str(annotated.header)
         assert "private-normal-rg" not in str(annotated.header)
@@ -71,44 +70,8 @@ def test_live_annotation_records_only_effective_settings(tmp_path, suffix):
         assert next(annotated).info["SKUA_ARTIFACT_PRIOR"] == pytest.approx((0.3,))
 
 
-def legacy_build_provenance(panel):
-    """A schema-1 build document, as written before compact summaries."""
-    metadata = skua.read_pon_metadata(panel)
-    return {
-        "schema_version": 1, "mode": "pon_build", "skua_version": metadata.skua_version,
-        "normal_samples": list(metadata.sample_names), "reference": metadata.reference_identity.as_dict(),
-        "evidence": {
-            "policy_version": metadata.evidence_policy_version,
-            "min_baseq": metadata.min_baseq, "min_mapq": metadata.min_mapq,
-            "mapq_255": "exclude", "normal_read_groups": "assigned_to_sample",
-        },
-        "normal_selections": [
-            {"sample_name": name, "selection": "read_groups", "read_group_ids": ["private-normal-rg"]}
-            for name in metadata.sample_names
-        ],
-        "inputs": {"normals": [{"path": "/private/normal.bam", "sha256": "a" * 64, "size_bytes": 123}]},
-    }
-
-
-def rewrite_panel_provenance(panel, output, provenance):
-    with pysam.VariantFile(str(panel)) as source:
-        serialized = str(source.header) + "".join(str(record) for record in source)
-    serialized = re.sub(r"^##SKUA_PROVENANCE=.*\n", "", serialized, flags=re.MULTILINE)
-    if provenance is not None:
-        encoded = base64.b64encode(json.dumps(provenance).encode()).decode()
-        serialized = serialized.replace("#CHROM", f"##SKUA_PROVENANCE={encoded}\n#CHROM")
-    source = output.with_suffix(".vcf")
-    source.write_text(serialized)
-    with pysam.VariantFile(str(source)) as vcf:
-        with pysam.VariantFile(str(output), "wb", header=vcf.header) as destination:
-            for record in vcf:
-                destination.write(record)
-    bcftools.index(str(output))
-
-
 @pytest.mark.parametrize("separate_vcf", [False, True])
-@pytest.mark.parametrize("legacy", [False, True])
-def test_cached_summary_uses_panel_thresholds_without_exporting_membership_or_history(tmp_path, separate_vcf, legacy):
+def test_cached_summary_uses_panel_thresholds_without_exporting_membership_or_history(tmp_path, separate_vcf):
     vcf = targets(tmp_path / "targets.vcf")
     vcf.write_text(vcf.read_text().replace(
         "#CHROM", '##INFO=<ID=SKUA_ARTIFACT_PRIOR,Number=A,Type=Float,Description="Prior">\n#CHROM',
@@ -116,18 +79,8 @@ def test_cached_summary_uses_panel_thresholds_without_exporting_membership_or_hi
     panel = tmp_path / "panel.bcf"
     with alignment(tmp_path / "normal.bam", "PRIVATE_NORMAL") as normal:
         skua.build_pon(vcf, normal_alignments=[normal], output_path=panel, min_baseq=25, min_mapq=35)
-    assert skua.read_provenance(panel) is None
     assert skua.read_pon_metadata(panel).sample_names == ("PRIVATE_NORMAL",)
-    assert inspect_pon(panel).provenance is None
     assert validate_pon(panel).valid
-    if legacy:
-        build = legacy_build_provenance(panel)
-        legacy_panel = tmp_path / "legacy.bcf"
-        rewrite_panel_provenance(panel, legacy_panel, build)
-        panel = legacy_panel
-        assert skua.read_provenance(panel) == build
-        assert skua.read_pon_metadata(panel).provenance == build
-        assert validate_pon(panel).valid
     output = tmp_path / "out.vcf"
     with alignment(tmp_path / "case.bam", "CASE") as case:
         skua.annotate_vcf_with_pon(
@@ -149,8 +102,8 @@ def test_cached_summary_uses_panel_thresholds_without_exporting_membership_or_hi
         assert next(result).info["SKUA_ARTIFACT_PRIOR"] == pytest.approx((0.8,))
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_force_replaces_old_metadata_and_preserves_unrelated_annotations(tmp_path, legacy):
+@pytest.mark.parametrize("unknown_metadata", [False, True])
+def test_force_replaces_metadata_and_preserves_unrelated_annotations(tmp_path, unknown_metadata):
     vcf = targets(tmp_path / "targets.vcf")
     vcf.write_text(vcf.read_text().replace(
         "#CHROM", '##external=/upstream/private/input.vcf\n##INFO=<ID=KEEP,Number=1,Type=Integer,Description="Keep">\n#CHROM',
@@ -158,8 +111,8 @@ def test_force_replaces_old_metadata_and_preserves_unrelated_annotations(tmp_pat
     first, second = tmp_path / "first.vcf", tmp_path / "second.vcf.gz"
     with alignment(tmp_path / 'case, "ø".bam', "CASE") as case:
         skua.annotate_vcf_with_normals(case, vcf, output_path=first, min_mapq=25)
-        if legacy:
-            first.write_text(re.sub(r"^##SKUA_RUN=.*$", "##SKUA_PROVENANCE=not-base64!",
+        if unknown_metadata:
+            first.write_text(re.sub(r"^##SKUA_RUN=.*$", "##SKUA_UNUSED=discard_me",
                                    first.read_text(), flags=re.MULTILINE))
         with pytest.raises(ValueError, match="already contains Skua annotations"):
             skua.annotate_vcf_with_normals(case, first, output_path=second)
@@ -203,11 +156,11 @@ def test_json_document_retains_minimal_summary_and_actual_python_selection_polic
             payload = skua.annotate_vcf_to_json(case, vcf, output_path=output, min_baseq=24, min_mapq=32)
     document = json.loads(payload)
     assert json.loads(output.read_text()) == document
-    assert set(document) == {"provenance", "records"}
+    assert set(document) == {"run_summary", "records"}
     assert len(document["records"]) == 1
-    summary = document["provenance"]
+    summary = document["run_summary"]
     assert set(summary) == {"schema_version", "skua_version", "mode", "evidence", "model", "case_read_groups", "reference"}
-    assert summary["schema_version"] == 2
+    assert summary["schema_version"] == 1
     assert summary["skua_version"] == skua.__version__
     assert summary["evidence"]["min_baseq"] == 24
     assert summary["evidence"]["min_mapq"] == 32
@@ -220,43 +173,10 @@ def test_json_document_retains_minimal_summary_and_actual_python_selection_polic
         assert summary["model"] is None
 
 
-@pytest.mark.parametrize("conflict", ["sample", "threshold", "reference", "mode", "version", "selection", "selection_sample"])
-def test_contradictory_legacy_panel_provenance_is_rejected_before_output(tmp_path, conflict):
-    vcf = targets(tmp_path / "targets.vcf")
-    panel, damaged = tmp_path / "panel.bcf", tmp_path / "damaged.bcf"
-    with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
-        skua.build_pon(vcf, normal_alignments=[normal], output_path=panel)
-    provenance = legacy_build_provenance(panel)
-    if conflict == "sample":
-        provenance["normal_samples"] = ["OTHER"]
-    elif conflict == "threshold":
-        provenance["evidence"]["min_mapq"] = 99
-    elif conflict == "reference":
-        provenance["reference"]["contigs"][0]["length"] = 999
-    elif conflict == "mode":
-        provenance["mode"] = "live_normals"
-    elif conflict == "selection":
-        provenance["normal_selections"][0]["selection"] = "all_alignment_reads"
-    elif conflict == "selection_sample":
-        provenance["normal_selections"][0]["sample_name"] = "OTHER"
-    else:
-        provenance["schema_version"] = 999
-    rewrite_panel_provenance(panel, damaged, provenance)
-    with pytest.raises(ValueError, match="provenance"):
-        skua.read_pon_metadata(damaged)
-    assert not validate_pon(damaged).valid
-    output = tmp_path / "out.vcf"
-    output.write_text("preserve existing output\n")
-    with alignment(tmp_path / "case.bam", "CASE") as case:
-        with pytest.raises(ValueError, match="provenance"):
-            skua.annotate_vcf_with_pon(case, damaged, output_path=output, force=True)
-    assert output.read_text() == "preserve existing output\n"
-
-
 def test_python_objects_without_backing_files_keep_summary_without_input_details(tmp_path):
     vcf = targets(tmp_path / "targets.vcf")
     document = json.loads(skua.annotate_vcf_to_json(FakeAlignmentFile([]), vcf))
-    assert document["provenance"]["case_read_groups"] == "all_alignment_reads"
+    assert document["run_summary"]["case_read_groups"] == "all_alignment_reads"
     assert_no_input_details(document)
 
 
@@ -271,20 +191,8 @@ def test_mixed_headerless_and_named_normals_record_selection_policy_without_iden
             FakeAlignmentFile([]), vcf, normal_alignments=[headerless, normal],
         ))
     assert document["records"][0]["counts"]["normal"]["usable"] == 2
-    assert document["provenance"]["evidence"]["normal_read_groups"] == "per_normal_selection"
+    assert document["run_summary"]["evidence"]["normal_read_groups"] == "per_normal_selection"
     assert_no_input_details(document)
-
-
-@pytest.mark.parametrize("metadata", [
-    "##SKUA_PROVENANCE=not-base64!\n",
-    "##SKUA_PROVENANCE=e30=\n",
-    "##SKUA_PROVENANCE=e30=\n##SKUA_PROVENANCE=e30=\n",
-])
-def test_public_reader_rejects_malformed_or_duplicate_legacy_provenance(tmp_path, metadata):
-    vcf = targets(tmp_path / "targets.vcf")
-    vcf.write_text(vcf.read_text().replace("#CHROM", metadata + "#CHROM"))
-    with pytest.raises(ValueError, match="(?i)provenance"):
-        skua.read_provenance(vcf)
 
 
 @pytest.mark.parametrize("mode", ["case", "live", "build", "cached", "cached_targets", "json", "json_normals"])
@@ -322,3 +230,22 @@ def test_metadata_does_not_hash_or_read_raw_input_files(tmp_path, monkeypatch, m
             skua.annotate_vcf_to_json(case, vcf)
         else:
             skua.annotate_vcf_to_json_with_normals(case, vcf, normal_alignments=[normal])
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_pon_build_rejects_or_replaces_unknown_skua_metadata(tmp_path, force):
+    vcf = targets(tmp_path / "targets.vcf")
+    vcf.write_text(vcf.read_text().replace("#CHROM", "##SKUA_UNUSED=discard_me\n#CHROM"))
+    panel = tmp_path / "panel.bcf"
+    with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
+        if not force:
+            with pytest.raises(ValueError, match="already contains Skua annotations: SKUA_UNUSED"):
+                skua.build_pon(vcf, normal_alignments=[normal], output_path=panel)
+            assert not panel.exists()
+            return
+        skua.build_pon(vcf, normal_alignments=[normal], output_path=panel, force=True)
+    assert validate_pon(panel).valid
+    with pysam.VariantFile(str(panel)) as source:
+        assert {r.key for r in source.header.records if r.key.startswith("SKUA_")} == {
+            "SKUA_PON", "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS",
+        }
