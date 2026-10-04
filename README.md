@@ -115,6 +115,8 @@ Output FORMAT fields:
 - `SKUA_UNUSABLE`: Total unusable reads (low quality, INDELs at locus, etc.)
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1)
 - `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models
+- `SKUA_ASSESSMENT_STATUS`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
+- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; `.` when assessed
 
 Output INFO fields:
 - `SKUA_ARTIFACT_PRIOR`: Effective prior probability that the ALT allele is an artifact before Skua evidence
@@ -125,6 +127,81 @@ Output INFO fields:
 - `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
 
 By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
+
+#### Assessment eligibility
+
+`SKUA_STATUS=ANNOTATED` means the allele is supported and its evidence was
+collected. Model eligibility is reported separately in the selected sample's
+`SKUA_ASSESSMENT_STATUS`. An unsupported allele retains its `UNSUPPORTED_*`
+record status and receives no new assessment or score fields. Unselected samples
+have missing assessment values. The evidence-only Python APIs do not assess a
+model; absence of an assessment must not be interpreted as `ASSESSED`.
+
+**Scores and counts are retained for `INSUFFICIENT_EVIDENCE` records.** In
+particular, a zero-case record still has log Bayes factor `0` and posterior equal
+to its effective prior. Such a score is not an evidence-supported assessment.
+PON counts continue to describe only the normals retained after truncation;
+empty panels and all-normals-truncated sites have zero pooled usable depth.
+`--strict` concerns allele support and does not reject insufficient evidence.
+
+The following inclusive assessment minima can be configured with either live
+normals or a cached PON. Depth means usable ALT plus non-ALT evidence, not ALT
+support alone. Normal depths are pooled across retained samples after truncation.
+
+| CLI option | Default | Requirement |
+| --- | --- | --- |
+| `--min-case-depth` | `1` | Total usable case depth |
+| `--min-normal-depth` | `1` | Total usable retained-normal depth |
+| `--min-normal-samples` | `0` | Retained normal sample count; `0` disables this extra requirement |
+| `--min-case-strand-depth` | `0` | Usable case depth on **each** strand; `0` disables |
+| `--min-normal-strand-depth` | `0` | Pooled retained-normal depth on **each** strand; `0` disables |
+
+All limits must be integers. Total-depth minima must be at least `1`, so zero
+evidence can never be made eligible; sample-count and strand minima may be `0`.
+The defaults only exclude absent evidence and are **not assay-validated coverage
+thresholds**. One-strand coverage is eligible by default; set the strand minima
+to positive, assay-validated values to require both strands. Agree on production
+depth, sample-count, and strand requirements through assay validation.
+`ASSESSED` means those configured requirements were met, not that the assay or
+variant call has been validated.
+
+All failing requirements are reported in `SKUA_ASSESSMENT_REASONS`, in this
+order: `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
+`CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`. No scores or counts are changed by
+tightening the assessment thresholds.
+
+For example, a downstream Python filter for a selected VCF sample can require
+eligibility before applying an illustrative posterior cutoff:
+
+```python
+sample = record.samples["CASE"]
+posterior = sample.get("SKUA_ARTIFACT_POSTERIOR")
+accept = (
+    record.info.get("SKUA_STATUS") == "ANNOTATED"
+    and sample.get("SKUA_ASSESSMENT_STATUS") == "ASSESSED"
+    and posterior is not None
+    and posterior < 0.01  # Example only; validate the cutoff for your assay.
+)
+```
+
+This rule cannot accept a zero-evidence record solely because its prior is low.
+Posterior-only filters must be updated to check eligibility.
+
+The exported `AssessmentThresholds` dataclass uses the same option names with
+underscores. Pass it as `assessment_thresholds=` to `compute_stats`,
+`annotate_vcf_with_normals`, `annotate_vcf_with_pon`, or
+`annotate_vcf_to_json_with_normals`. `Stats.assessment_status` is an exported
+`AssessmentStatus` string enum; `Stats.assessment_reasons` is a tuple of reason
+strings. Python JSON output includes the same status and a reasons list under
+`stats` (empty when assessed); it continues to contain supported alleles only.
+
+When `compute_stats` receives `per_sample_evidences`, those samples are
+authoritative: the retained pool supplies its normal counts, background summary,
+scores, and eligibility, even for an empty list. With aggregate-only input, the
+supplied pool is used as-is. If `min_normal_samples > 0`, aggregate-only input is
+ineligible with reason `NORMAL_SAMPLE_COUNT_UNAVAILABLE`, because the number of
+samples cannot be inferred from pooled counts. Supply per-sample evidence to
+evaluate that requirement.
 
 File outputs are transactional and no-clobber by default. Skua writes a sibling
 temporary VCF and publishes it atomically only after annotation finishes;

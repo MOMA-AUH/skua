@@ -1917,6 +1917,8 @@ def test_annotate_vcf_to_json_with_normals_returns_pon_payload(tmp_path) -> None
         "log_bayes_factor_artifact_vs_variant",
         "dispersion_factor",
         "pon_sample_count",
+        "assessment_status",
+        "assessment_reasons",
     ]
 
 

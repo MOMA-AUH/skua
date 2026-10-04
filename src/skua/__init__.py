@@ -19,13 +19,15 @@ from .core import (
 )
 from .evidence import AggregatedEvidence, AlleleSupport, ReadAlleleCall, UnusableReason
 from .pon import PonArtifactMetadata, read_pon_evidence, read_pon_metadata
-from .stats import Stats, compute_stats
+from .stats import AssessmentStatus, AssessmentThresholds, Stats, compute_stats
 from .variants import Variant, VariantKind
 from ._version import __version__
 
 __all__ = [
     "AggregatedEvidence",
     "AnnotationStatus",
+    "AssessmentStatus",
+    "AssessmentThresholds",
     "AlleleSupport",
     "PonAnnotation",
     "PonArtifactMetadata",

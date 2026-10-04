@@ -34,6 +34,7 @@ from .pon import (
     write_pon_artifact,
 )
 from .stats import (
+    AssessmentThresholds,
     DEFAULT_TRUNCATE,
     _validate_model_parameters,
     aggregate_evidence,
@@ -55,6 +56,11 @@ READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
 MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_LOG_BAYES_FACTOR", "Float", "Log Bayes factor artifact-vs-variant"),
     ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
+)
+
+ASSESSMENT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, int | str, str], ...] = (
+    ("SKUA_ASSESSMENT_STATUS", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are retained"),
+    ("SKUA_ASSESSMENT_REASONS", ".", "Unmet assessment requirements; missing when ASSESSED"),
 )
 
 PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
@@ -430,6 +436,16 @@ def _validate_no_existing_skua_annotations(
         ):
             existing_annotations.append(field_id)
 
+    for field_id, number, _description in ASSESSMENT_FORMAT_FIELD_DEFINITIONS:
+        if _validate_owned_field_definition(
+            header.formats,
+            field_id=field_id,
+            number=number,
+            field_type="String",
+            field_kind="FORMAT",
+        ):
+            existing_annotations.append(field_id)
+
     status_id, status_type, _description = ANNOTATION_STATUS_INFO_FIELD_DEFINITION
     if _validate_owned_field_definition(
         header.info,
@@ -555,6 +571,12 @@ def _ensure_skua_vcf_header_fields(header: Any, *, include_pon_info: bool) -> An
             if field_id not in annotated_header.formats:
                 annotated_header.add_line(
                     f'##FORMAT=<ID={field_id},Number=1,Type={field_type},Description="{description}">'
+                )
+
+        for field_id, number, description in ASSESSMENT_FORMAT_FIELD_DEFINITIONS:
+            if field_id not in annotated_header.formats:
+                annotated_header.add_line(
+                    f'##FORMAT=<ID={field_id},Number={number},Type=String,Description="{description}">'
                 )
 
         for field_id, field_type, description in PON_INFO_FIELD_DEFINITIONS:
@@ -754,6 +776,7 @@ def _annotate_pon_record(
     truncate: float,
     pseudocount: float,
     prior_artifact_probability: float,
+    assessment_thresholds: AssessmentThresholds,
 ) -> None:
     """Annotate one case record from live or precomputed normal evidence."""
     case_evidence = annotation.case_evidence
@@ -769,6 +792,7 @@ def _annotate_pon_record(
         truncate=truncate,
         pseudocount=pseudocount,
         prior_artifact_probability=prior_artifact_probability,
+        assessment_thresholds=assessment_thresholds,
     )
 
     _annotate_read_count_format_fields(record, case_evidence, sample_name=sample_name)
@@ -778,6 +802,14 @@ def _annotate_pon_record(
         artifact_posterior=stats.artifact_posterior,
         log_bayes_factor=stats.log_bayes_factor_artifact_vs_variant,
     )
+    # Explicitly initialize String FORMAT values for unselected samples:
+    # pysam otherwise fills newly added strings with non-text missing sentinels.
+    for record_sample in record.samples.values():
+        record_sample["SKUA_ASSESSMENT_STATUS"] = "."
+        record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
+    sample = record.samples[sample_name]
+    sample["SKUA_ASSESSMENT_STATUS"] = stats.assessment_status.value
+    sample["SKUA_ASSESSMENT_REASONS"] = stats.assessment_reasons or (".",)
     record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
     record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
     record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
@@ -1036,6 +1068,7 @@ def annotate_vcf_with_normals(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
     force: bool = False,
 ) -> None:
     """Annotate a VCF with fresh read counts and PON model fields."""
@@ -1081,6 +1114,7 @@ def annotate_vcf_with_normals(
             truncate=truncate,
             pseudocount=pseudocount,
             prior_artifact_probability=next(effective_artifact_priors),
+            assessment_thresholds=assessment_thresholds,
         )
 
     def build_supported_annotations(
@@ -1534,6 +1568,7 @@ def annotate_vcf_with_pon(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
     force: bool = False,
 ) -> None:
     """Annotate VCF targets using cached PON evidence and fresh case evidence.
@@ -1591,6 +1626,7 @@ def annotate_vcf_with_pon(
             truncate=truncate,
             pseudocount=pseudocount,
             prior_artifact_probability=next(effective_artifact_priors),
+            assessment_thresholds=assessment_thresholds,
         )
 
     def build_supported_annotations(
@@ -1799,6 +1835,7 @@ def format_annotation_results_with_normals(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
 ) -> list[dict[str, Any]]:
     """Convert PON annotation results to JSON/tabular-ready row dictionaries."""
     _validate_model_parameters(
@@ -1824,6 +1861,7 @@ def format_annotation_results_with_normals(
             truncate=truncate,
             pseudocount=pseudocount,
             prior_artifact_probability=prior_artifact_probability,
+            assessment_thresholds=assessment_thresholds,
         )
         normal_samples_used = len(normal_samples_included)
         rows.append(
@@ -1837,6 +1875,8 @@ def format_annotation_results_with_normals(
                     "log_bayes_factor_artifact_vs_variant": stats.log_bayes_factor_artifact_vs_variant,
                     "dispersion_factor": stats.dispersion_rho,
                     "pon_sample_count": normal_samples_used,
+                    "assessment_status": stats.assessment_status.value,
+                    "assessment_reasons": list(stats.assessment_reasons),
                 },
                 "counts": {
                     "case": {
@@ -1879,6 +1919,7 @@ def _build_annotation_rows_with_normals(
     truncate: float,
     pseudocount: float,
     prior_artifact_probability: float,
+    assessment_thresholds: AssessmentThresholds,
 ) -> list[dict[str, Any]]:
     """Build formatted PON annotation rows from case + normal alignments and one VCF."""
     return format_annotation_results_with_normals(
@@ -1892,6 +1933,7 @@ def _build_annotation_rows_with_normals(
         truncate=truncate,
         pseudocount=pseudocount,
         prior_artifact_probability=prior_artifact_probability,
+        assessment_thresholds=assessment_thresholds,
     )
 
 
@@ -1906,6 +1948,7 @@ def annotate_vcf_to_json_with_normals(
     truncate: float = DEFAULT_TRUNCATE,
     pseudocount: float = sys.float_info.epsilon,
     prior_artifact_probability: float = 0.5,
+    assessment_thresholds: AssessmentThresholds = AssessmentThresholds(),
 ) -> str:
     """Run PON variant annotation from VCF and return JSON output, optionally writing to file."""
     if normal_alignments is None:
@@ -1920,6 +1963,7 @@ def annotate_vcf_to_json_with_normals(
         truncate=truncate,
         pseudocount=pseudocount,
         prior_artifact_probability=prior_artifact_probability,
+        assessment_thresholds=assessment_thresholds,
     )
     return _render_and_optionally_write(
         rows,
