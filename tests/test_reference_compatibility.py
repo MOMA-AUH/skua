@@ -213,6 +213,7 @@ def test_pon_validation_rejects_conflicting_target_dictionary(tmp_path):
     ("SKUA_REFERENCE_STATUS=VERIFIED", "SKUA_REFERENCE_STATUS=INSUFFICIENT_METADATA", "inconsistent"),
     ('EvidencePolicyVersion="4"', 'EvidencePolicyVersion="999"', "Unsupported PON evidence policy"),
     ('ID=chr1,Verified="1"', 'ID=other,Verified="1"', "missing reference identity"),
+    ("##contig=<ID=chr1>", "##contig=<ID=chr1,length=300>", "Conflicting reference length"),
 ])
 def test_malformed_panel_reference_metadata_cannot_publish_output(tmp_path, old, new, error):
     vcf = targets(tmp_path / "targets.vcf")

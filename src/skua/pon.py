@@ -219,6 +219,11 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
                 "expected Number=1,Type=Integer"
             )
 
+    reference_identity = read_reference_header(header)
+    check_reference_compatibility(
+        (contig.name for contig in reference_identity.contigs), alignment_files=[],
+        pon_reference=reference_identity, vcf_header=header,
+    )
     return PonArtifactMetadata(
         schema_version=schema_version,
         evidence_policy_version=evidence_policy_version,
@@ -226,7 +231,7 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         min_mapq=min_mapq,
         skua_version=items["SkuaVersion"],
         sample_names=sample_names,
-        reference_identity=read_reference_header(header),
+        reference_identity=reference_identity,
     )
 
 
