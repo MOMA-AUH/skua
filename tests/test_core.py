@@ -684,8 +684,8 @@ def test_annotate_vcf_late_failure_does_not_publish_a_partial_output(
         'MinMapQ=20,SkuaVersion="0.7.0">'
     ]
     + [
-        '##INFO=<ID=SKUA_LEGACY,Number=1,Type=Integer,Description="Legacy">',
-        '##FORMAT=<ID=SKUA_LEGACY_FMT,Number=1,Type=Integer,Description="Legacy">',
+        '##INFO=<ID=SKUA_UNUSED,Number=1,Type=Integer,Description="Unused">',
+        '##FORMAT=<ID=SKUA_UNUSED_FMT,Number=1,Type=Integer,Description="Unused">',
     ],
 )
 def test_annotate_vcf_rejects_preannotated_input(definition, tmp_path) -> None:
@@ -730,10 +730,10 @@ def test_annotate_vcf_force_replaces_stale_annotations_on_every_record_and_sampl
     header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
     _ensure_skua_vcf_header_fields(header, include_pon_info=True)
     header.add_line(
-        '##INFO=<ID=SKUA_LEGACY,Number=1,Type=Integer,Description="Legacy">'
+        '##INFO=<ID=SKUA_UNUSED,Number=1,Type=Integer,Description="Unused">'
     )
     header.add_line(
-        '##FORMAT=<ID=SKUA_LEGACY_FMT,Number=1,Type=Integer,Description="Legacy">'
+        '##FORMAT=<ID=SKUA_UNUSED_FMT,Number=1,Type=Integer,Description="Unused">'
     )
     header.add_sample("CASE")
     header.add_sample("CONTROL")
@@ -748,14 +748,14 @@ def test_annotate_vcf_force_replaces_stale_annotations_on_every_record_and_sampl
             )
             record.info["CALLER_SCORE"] = position
             record.info["SKUA_STATUS"] = "ANNOTATED"
-            record.info["SKUA_LEGACY"] = 99
+            record.info["SKUA_UNUSED"] = 99
             record.info["SKUA_ARTIFACT_PRIOR"] = tuple(0.2 for _alt in alts)
             for field_id, field_type, _description in PON_INFO_FIELD_DEFINITIONS:
                 record.info[field_id] = 9.0 if field_type == "Float" else 99
             for sample_name in ("CASE", "CONTROL"):
                 sample = record.samples[sample_name]
                 sample["GT"] = (0, 1)
-                sample["SKUA_LEGACY_FMT"] = 99
+                sample["SKUA_UNUSED_FMT"] = 99
                 for field_id, _description in READ_COUNT_FORMAT_FIELD_DEFINITIONS:
                     sample[field_id] = 99
                 for field_id, _field_type, _description in (
@@ -777,8 +777,8 @@ def test_annotate_vcf_force_replaces_stale_annotations_on_every_record_and_sampl
     )
 
     with pysam.VariantFile(str(output_path)) as reannotated:
-        assert "SKUA_LEGACY" not in reannotated.header.info
-        assert "SKUA_LEGACY_FMT" not in reannotated.header.formats
+        assert "SKUA_UNUSED" not in reannotated.header.info
+        assert "SKUA_UNUSED_FMT" not in reannotated.header.formats
         records = list(reannotated)
 
     supported, unsupported = records

@@ -13,6 +13,7 @@ from skua import (
 )
 from skua.pon import (
     EVIDENCE_POLICY_VERSION,
+    PON_SCHEMA_VERSION,
     PON_EVIDENCE_FORMAT_FIELDS,
     inspect_pon,
     validate_pon,
@@ -64,18 +65,18 @@ def _normal(sample_name: str, reads: list[FakeRead]) -> FakeAlignmentFile:
     )
 
 
-def _write_legacy_pon(path, policy_version: int) -> None:
-    """Write a structurally valid PON produced under an older evidence policy."""
+def _write_unsupported_pon(path, schema_version: int, policy_version: int) -> None:
+    """Write a PON with an unsupported schema or evidence-policy version."""
     header = pysam.VariantHeader()
     header.contigs.add("chr1", length=1000)
     header.add_meta(
         "SKUA_PON",
         items=[
-            ("SchemaVersion", "1"),
+            ("SchemaVersion", str(schema_version)),
             ("EvidencePolicyVersion", str(policy_version)),
             ("MinBaseQ", "20"),
             ("MinMapQ", "20"),
-            ("SkuaVersion", "0.6.0" if policy_version == 1 else "0.7.1"),
+            ("SkuaVersion", "0.7.3"),
         ],
     )
     for field_id in (
@@ -87,7 +88,7 @@ def _write_legacy_pon(path, policy_version: int) -> None:
         "SKUA_PON_X",
     ):
         header.add_line(
-            f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="Legacy evidence">'
+            f'##FORMAT=<ID={field_id},Number=1,Type=Integer,Description="PON evidence">'
         )
     header.add_sample("N1")
 
@@ -454,44 +455,52 @@ def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) 
     assert inspection.sample_names == ("N1",)
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
-def test_legacy_pon_can_be_inspected_but_not_read(tmp_path, policy_version) -> None:
-    pon_path = tmp_path / "legacy.pon.bcf"
-    _write_legacy_pon(pon_path, policy_version)
+@pytest.mark.parametrize("schema_version,policy_version,error", [
+    (999, EVIDENCE_POLICY_VERSION, "Unsupported PON schema version 999"),
+    (PON_SCHEMA_VERSION, 999, "Unsupported PON evidence policy version 999"),
+])
+def test_unsupported_pon_can_be_inspected_but_not_read(tmp_path, schema_version, policy_version, error) -> None:
+    pon_path = tmp_path / "unsupported.pon.bcf"
+    _write_unsupported_pon(pon_path, schema_version, policy_version)
 
     inspection = inspect_pon(pon_path)
 
     assert inspection.evidence_policy_version == str(policy_version)
     with pytest.raises(
         ValueError,
-        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
+        match=error,
     ):
         read_pon_metadata(pon_path)
     with pytest.raises(
         ValueError,
-        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
+        match=error,
     ):
         list(read_pon_evidence(pon_path))
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
-def test_validate_pon_rejects_legacy_artifact(tmp_path, policy_version) -> None:
-    pon_path = tmp_path / "legacy.pon.bcf"
-    _write_legacy_pon(pon_path, policy_version)
+@pytest.mark.parametrize("schema_version,policy_version,error", [
+    (999, EVIDENCE_POLICY_VERSION, "Unsupported PON schema version 999"),
+    (PON_SCHEMA_VERSION, 999, "Unsupported PON evidence policy version 999"),
+])
+def test_validate_pon_rejects_unsupported_artifact(tmp_path, schema_version, policy_version, error) -> None:
+    pon_path = tmp_path / "unsupported.pon.bcf"
+    _write_unsupported_pon(pon_path, schema_version, policy_version)
 
     result = validate_pon(pon_path)
 
     assert result.valid is False
-    assert result.errors == (
-        "Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
-    )
+    assert len(result.errors) == 1
+    assert error in result.errors[0]
 
 
-@pytest.mark.parametrize("policy_version", [1, 2, 3, 4])
-def test_cached_annotation_rejects_legacy_pon_before_output(tmp_path, policy_version) -> None:
-    pon_path = tmp_path / "legacy.pon.bcf"
+@pytest.mark.parametrize("schema_version,policy_version,error", [
+    (999, EVIDENCE_POLICY_VERSION, "Unsupported PON schema version 999"),
+    (PON_SCHEMA_VERSION, 999, "Unsupported PON evidence policy version 999"),
+])
+def test_cached_annotation_rejects_unsupported_pon_before_output(tmp_path, schema_version, policy_version, error) -> None:
+    pon_path = tmp_path / "unsupported.pon.bcf"
     output_path = tmp_path / "annotated.vcf"
-    _write_legacy_pon(pon_path, policy_version)
+    _write_unsupported_pon(pon_path, schema_version, policy_version)
     case = FakeAlignmentFile(
         [],
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
@@ -500,7 +509,7 @@ def test_cached_annotation_rejects_legacy_pon_before_output(tmp_path, policy_ver
 
     with pytest.raises(
         ValueError,
-        match="Unsupported PON schema version 1; expected 2; rebuild the PON from the original targets and normal alignments",
+        match=error,
     ):
         annotate_vcf_with_pon(case, pon_path, output_path=output_path)
 

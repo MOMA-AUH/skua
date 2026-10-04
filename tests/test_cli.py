@@ -77,11 +77,11 @@ def _pon_inspection() -> PonInspection:
         format="BCF",
         index_present=True,
         metadata_record_count=1,
-        schema_version="1",
-        evidence_policy_version="1",
+        schema_version="2",
+        evidence_policy_version="6",
         min_baseq="20",
         min_mapq="20",
-        skua_version="0.5.0",
+        skua_version="0.7.3",
         sample_names=("N1", "N2"),
     )
 
@@ -90,11 +90,23 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
     monkeypatch.setattr(cli, "inspect_pon", lambda path: _pon_inspection())
 
     assert cli.main(["pon", "inspect", "panel.pon.bcf"]) == 0
-    assert "PON: panel.pon.bcf" in capsys.readouterr().out
+    assert capsys.readouterr().out == (
+        "PON: panel.pon.bcf\n"
+        "Format: BCF\n"
+        "CSI index: present\n"
+        "PON metadata records: 1\n"
+        "Schema version: 2\n"
+        "Evidence policy version: 6\n"
+        "Minimum base quality: 20\n"
+        "Minimum mapping quality: 20\n"
+        "Skua version: 0.7.3\n"
+        "Reference status: <missing or invalid>\n"
+        "Normal samples (2): N1, N2\n"
+    )
 
     assert cli.main(["pon", "inspect", "panel.pon.bcf", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "evidence_policy_version": "1",
+        "evidence_policy_version": "6",
         "format": "BCF",
         "index_present": True,
         "metadata_record_count": 1,
@@ -103,11 +115,10 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
         "path": "panel.pon.bcf",
         "sample_count": 2,
         "sample_names": ["N1", "N2"],
-        "schema_version": "1",
-        "skua_version": "0.5.0",
+        "schema_version": "2",
+        "skua_version": "0.7.3",
         "reference_status": None,
         "reference_identity": None,
-        "provenance": None,
     }
 
 
@@ -149,7 +160,7 @@ def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys
     assert json.loads(capsys.readouterr().out) == {
         "errors": ["PON artifact is missing its .csi index"],
         "inspection": {
-            "evidence_policy_version": "1",
+            "evidence_policy_version": "6",
             "format": "BCF",
             "index_present": True,
             "metadata_record_count": 1,
@@ -158,11 +169,10 @@ def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys
             "path": "panel.pon.bcf",
             "sample_count": 2,
             "sample_names": ["N1", "N2"],
-            "schema_version": "1",
-            "skua_version": "0.5.0",
+            "schema_version": "2",
+            "skua_version": "0.7.3",
             "reference_status": None,
             "reference_identity": None,
-            "provenance": None,
         },
         "valid": False,
     }

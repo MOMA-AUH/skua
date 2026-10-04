@@ -412,7 +412,6 @@ def _format_pon_inspection(inspection: PonInspection) -> str:
             "Reference status: " + (
                 inspection.reference_identity.status if inspection.reference_identity else "<missing or invalid>"
             ),
-            "Build provenance: " + ("available" if inspection.provenance is not None else "<missing or invalid>"),
             f"Normal samples ({len(inspection.sample_names)}): {sample_names}",
         )
     )

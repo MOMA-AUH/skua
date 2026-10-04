@@ -94,10 +94,10 @@ def test_live_case_and_normals_match_cached_mapq_policy(tmp_path):
     old = serialized.replace('EvidencePolicyVersion="6"', 'EvidencePolicyVersion="5"')
     assert old != serialized
     (tmp_path / "old.vcf").write_text(old)
-    legacy = tmp_path / "old.bcf"
-    bcftools.view("-Ob", "-o", str(legacy), str(tmp_path / "old.vcf"), catch_stdout=False)
-    bcftools.index(str(legacy))
-    assert inspect_pon(legacy).evidence_policy_version == "5"
-    assert not validate_pon(legacy).valid
+    incompatible = tmp_path / "old.bcf"
+    bcftools.view("-Ob", "-o", str(incompatible), str(tmp_path / "old.vcf"), catch_stdout=False)
+    bcftools.index(str(incompatible))
+    assert inspect_pon(incompatible).evidence_policy_version == "5"
+    assert not validate_pon(incompatible).valid
     with pytest.raises(ValueError, match="evidence policy.*rebuild"):
-        read_pon_metadata(legacy)
+        read_pon_metadata(incompatible)
