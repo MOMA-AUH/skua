@@ -14,6 +14,7 @@ from typing import Iterator
 from typing import TypeVar
 
 import pysam
+from ._headers import remove_header_records
 
 from ._output import (
     cleanup_paths,
@@ -42,6 +43,7 @@ from .stats import (
     truncated_normal_evidences,
 )
 from .variants import Variant
+from .reference import ReferenceIdentity, check_reference_compatibility, write_reference_header
 
 
 READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
@@ -305,7 +307,8 @@ def _validate_vcf_against_inputs(
     alignment_files: list[tuple[str, Any]],
     reference_path: str | Path | None,
     strict: bool = False,
-) -> None:
+    pon_reference: ReferenceIdentity | None = None,
+) -> ReferenceIdentity:
     """Validate supported VCF records against alignment contigs and an optional FASTA."""
     _validate_alignment_indexes(alignment_files)
     alignment_contigs = [
@@ -322,7 +325,9 @@ def _validate_vcf_against_inputs(
         fasta_file = pysam.FastaFile(str(reference_path))
 
     try:
+        target_contigs: set[str] = set()
         with pysam.VariantFile(str(vcf_path)) as source_vcf:
+            source_header = source_vcf.header.copy()
             for record in source_vcf:
                 assessment = _assess_vcf_record(record)
                 if strict and assessment.status != AnnotationStatus.ANNOTATED:
@@ -333,6 +338,7 @@ def _validate_vcf_against_inputs(
                 variant = assessment.variant
                 if variant is None:
                     continue
+                target_contigs.add(variant.contig)
 
                 for label, contigs in alignment_contigs:
                     if contigs is not None and variant.contig not in contigs:
@@ -353,6 +359,11 @@ def _validate_vcf_against_inputs(
                         f"VCF REF allele at {variant.contig}:{variant.ref_pos0 + 1} "
                         f"is {variant.ref!r}, but the reference FASTA contains {reference_bases!r}"
                     )
+        return check_reference_compatibility(
+            target_contigs, alignment_files=alignment_files, fasta_file=fasta_file,
+            pon_reference=pon_reference,
+            vcf_header=source_header,
+        )
     finally:
         if fasta_file is not None:
             fasta_file.close()
@@ -505,7 +516,9 @@ def _validate_no_existing_skua_annotations(
     for record in header.records:
         if (
             record.key.startswith("SKUA_")
-            and not (allow_pon_storage and record.key == PON_HEADER_KEY)
+            and not (allow_pon_storage and record.key in {
+                PON_HEADER_KEY, "SKUA_REFERENCE", "SKUA_REFERENCE_STATUS",
+            })
             and record.key not in existing_annotations
         ):
             existing_annotations.append(record.key)
@@ -528,9 +541,7 @@ def _copy_header_without_skua_annotations(header: Any) -> Any:
     for field_id in tuple(cleaned.formats):
         if field_id.startswith("SKUA_"):
             cleaned.formats.remove_header(field_id)
-    for record in tuple(cleaned.records):
-        if record.key.startswith("SKUA_"):
-            record.remove()
+    remove_header_records(cleaned, {r.key for r in cleaned.records if r.key.startswith("SKUA_")})
     # A second copy rebuilds htslib's internal ID dictionary so definitions
     # removed above can safely be added again under their canonical schema.
     return cleaned.copy()
@@ -864,6 +875,7 @@ def _annotate_vcf_stream(
         None,
     ],
     force: bool,
+    reference_identity: ReferenceIdentity,
 ) -> None:
     """Write an annotated VCF after caller-specific input preflight.
 
@@ -899,6 +911,7 @@ def _annotate_vcf_stream(
             output_header,
             include_pon_info=include_pon_info,
         )
+        write_reference_header(header, reference_identity)
         case_selection = _resolve_case_sample(
             source_vcf.header,
             alignment_file,
@@ -1005,7 +1018,7 @@ def annotate_vcf(
     """Annotate a VCF, replacing existing Skua annotations when forced."""
     _validate_annotation_parameters(min_baseq=min_baseq, min_mapq=min_mapq)
     _validate_distinct_vcf_paths(vcf_path, output_path)
-    _validate_vcf_against_inputs(
+    reference_identity = _validate_vcf_against_inputs(
         vcf_path,
         alignment_files=[("Case alignment", alignment_file)],
         reference_path=reference_path,
@@ -1051,6 +1064,7 @@ def annotate_vcf(
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
         force=force,
+        reference_identity=reference_identity,
     )
 
 
@@ -1084,7 +1098,7 @@ def annotate_vcf_with_normals(
     )
     _validate_distinct_vcf_paths(vcf_path, output_path)
     _validate_normal_alignment_samples(normal_alignments)
-    _validate_vcf_against_inputs(
+    reference_identity = _validate_vcf_against_inputs(
         vcf_path,
         alignment_files=[("Case alignment", alignment_file)]
         + [
@@ -1139,6 +1153,7 @@ def annotate_vcf_with_normals(
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
         force=force,
+        reference_identity=reference_identity,
     )
 
 
@@ -1310,6 +1325,10 @@ def annotate_variant_with_normals(
     """Collect case and normal evidence for one variant."""
     if normal_alignments is None:
         normal_alignments = []
+    check_reference_compatibility(
+        [variant.contig], alignment_files=[("Case alignment", alignment_file)]
+        + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
+    )
 
     case_evidence = annotate_variant(
         alignment_file,
@@ -1440,7 +1459,7 @@ def build_pon(
     if len(set(sample_names)) != len(sample_names):
         raise ValueError("Normal alignment sample names must be unique")
 
-    _validate_vcf_against_inputs(
+    reference_identity = _validate_vcf_against_inputs(
         vcf_path,
         alignment_files=[
             (f"Normal alignment {index}", normal_alignment)
@@ -1468,6 +1487,7 @@ def build_pon(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         force=force,
+        reference_identity=reference_identity,
     )
 
 
@@ -1479,6 +1499,10 @@ def annotate_variants_from_pon(
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield case evidence paired with cached per-normal evidence."""
     metadata = read_pon_metadata(pon_path)
+    _validate_vcf_against_inputs(
+        pon_path, alignment_files=[("Case alignment", alignment_file)],
+        reference_path=None, strict=True, pon_reference=metadata.reference_identity,
+    )
 
     case_results = annotate_variants_from_vcf(
         alignment_file,
@@ -1589,11 +1613,12 @@ def annotate_vcf_with_pon(
     _validate_distinct_vcf_paths(source_vcf_path, output_path)
     if vcf_path is not None:
         _validate_distinct_vcf_paths(pon_path, output_path)
-    _validate_vcf_against_inputs(
+    reference_identity = _validate_vcf_against_inputs(
         source_vcf_path,
         alignment_files=[("Case alignment", alignment_file)],
         reference_path=reference_path,
         strict=True if vcf_path is None else strict,
+        pon_reference=metadata.reference_identity,
     )
     pon_evidence_by_variant: dict[Variant, tuple[AggregatedEvidence, ...]] | None = None
     if vcf_path is None:
@@ -1659,6 +1684,7 @@ def annotate_vcf_with_pon(
         build_supported_annotations=build_supported_annotations,
         annotate_supported_record=annotate_supported_record,
         force=force,
+        reference_identity=reference_identity,
     )
 
 
@@ -1776,6 +1802,11 @@ def annotate_variants_with_normals(
         normal_alignments = []
 
     for variant_batch in _variant_batches(variants):
+        check_reference_compatibility(
+            (variant.contig for variant in variant_batch),
+            alignment_files=[("Case alignment", alignment_file)]
+            + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
+        )
         case_evidences = _collect_variant_batch(
             alignment_file,
             variant_batch,

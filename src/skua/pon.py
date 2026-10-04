@@ -9,6 +9,7 @@ import pysam
 from pysam import bcftools
 
 from ._version import __version__
+from ._headers import remove_header_records
 from ._output import (
     cleanup_paths,
     ensure_outputs_available,
@@ -17,9 +18,10 @@ from ._output import (
 )
 from .evidence import AggregatedEvidence
 from .variants import Variant
+from .reference import ReferenceIdentity, check_reference_compatibility, read_reference_header, write_reference_header
 
 
-PON_SCHEMA_VERSION = 1
+PON_SCHEMA_VERSION = 2
 EVIDENCE_POLICY_VERSION = 4
 PON_HEADER_KEY = "SKUA_PON"
 _ARTIFACT_PRIOR_FIELD_ID = "SKUA_ARTIFACT_PRIOR"
@@ -53,6 +55,7 @@ class PonArtifactMetadata:
     min_mapq: int
     skua_version: str
     sample_names: tuple[str, ...]
+    reference_identity: ReferenceIdentity
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class PonInspection:
     min_mapq: str | None
     skua_version: str | None
     sample_names: tuple[str, ...]
+    reference_identity: ReferenceIdentity | None = None
 
     def as_dict(self) -> dict[str, object]:
         """Return a JSON-ready representation of this inspection."""
@@ -84,6 +88,8 @@ class PonInspection:
             "skua_version": self.skua_version,
             "sample_count": len(self.sample_names),
             "sample_names": list(self.sample_names),
+            "reference_status": None if self.reference_identity is None else self.reference_identity.status,
+            "reference_identity": None if self.reference_identity is None else self.reference_identity.as_dict(),
         }
 
 
@@ -142,6 +148,10 @@ def inspect_pon(path: str | Path) -> PonInspection:
     """Read PON header metadata without requiring a supported artifact schema."""
     path_obj = Path(path)
     with pysam.VariantFile(str(path_obj)) as pon_file:
+        try:
+            reference_identity = read_reference_header(pon_file.header)
+        except ValueError:
+            reference_identity = None
         metadata_records = _metadata_records(pon_file.header)
         metadata = (
             _metadata_items_from_record(metadata_records[0])
@@ -159,6 +169,7 @@ def inspect_pon(path: str | Path) -> PonInspection:
             min_mapq=metadata.get("MinMapQ"),
             skua_version=metadata.get("SkuaVersion"),
             sample_names=tuple(pon_file.header.samples),
+            reference_identity=reference_identity,
         )
 
 
@@ -187,7 +198,8 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
 
     if schema_version != PON_SCHEMA_VERSION:
         raise ValueError(
-            f"Unsupported PON schema version {schema_version}; expected {PON_SCHEMA_VERSION}"
+            f"Unsupported PON schema version {schema_version}; expected {PON_SCHEMA_VERSION}; "
+            "rebuild the PON from the original targets and normal alignments"
         )
     if evidence_policy_version != EVIDENCE_POLICY_VERSION:
         raise ValueError(
@@ -221,6 +233,7 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         min_mapq=min_mapq,
         skua_version=items["SkuaVersion"],
         sample_names=sample_names,
+        reference_identity=read_reference_header(header),
     )
 
 
@@ -363,6 +376,7 @@ def validate_pon(
     errors: list[str] = []
     path_obj = Path(path)
     variants: list[Variant] = []
+    metadata: PonArtifactMetadata | None = None
 
     if inspection.format != "BCF":
         errors.append("PON artifact must be BCF")
@@ -371,6 +385,7 @@ def validate_pon(
     _validate_index(path_obj, errors)
     try:
         with pysam.VariantFile(str(path_obj)) as pon_file:
+            pon_header = pon_file.header.copy()
             metadata = _validate_header(pon_file.header, errors)
             sample_names = () if metadata is None else metadata.sample_names
             seen_variants: set[Variant] = set()
@@ -416,11 +431,34 @@ def validate_pon(
         errors.append("PON artifact must contain at least one target record")
 
     variant_tuple = tuple(variants)
+    if metadata is not None:
+        try:
+            if reference_path is not None:
+                with pysam.FastaFile(str(reference_path)) as fasta:
+                    check_reference_compatibility(
+                        (v.contig for v in variants), alignment_files=[], fasta_file=fasta,
+                        pon_reference=metadata.reference_identity,
+                        vcf_header=pon_header,
+                    )
+            else:
+                check_reference_compatibility(
+                    (v.contig for v in variants), alignment_files=[],
+                    pon_reference=metadata.reference_identity,
+                    vcf_header=pon_header,
+                )
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
     if reference_path is not None and variant_tuple:
         _validate_reference(reference_path, variant_tuple, errors)
 
     if target_vcf_path is not None:
         try:
+            if metadata is not None:
+                with pysam.VariantFile(str(target_vcf_path)) as targets:
+                    check_reference_compatibility(
+                        (v.contig for v in variants), alignment_files=[],
+                        pon_reference=metadata.reference_identity, vcf_header=targets.header,
+                    )
             if variant_tuple != _target_variants(target_vcf_path):
                 errors.append("PON artifact targets do not match the supplied target VCF")
         except (OSError, ValueError) as exc:
@@ -495,9 +533,7 @@ def _copy_header_without_skua_annotations(header: Any) -> Any:
     for field_id in tuple(cleaned.formats):
         if field_id.startswith("SKUA_"):
             cleaned.formats.remove_header(field_id)
-    for record in tuple(cleaned.records):
-        if record.key.startswith("SKUA_"):
-            record.remove()
+    remove_header_records(cleaned, {r.key for r in cleaned.records if r.key.startswith("SKUA_")})
     return cleaned.copy()
 
 
@@ -536,6 +572,7 @@ def write_pon_artifact(
     evidence_records: Iterable[tuple[Variant, tuple[AggregatedEvidence, ...]]],
     min_baseq: int,
     min_mapq: int,
+    reference_identity: ReferenceIdentity,
     force: bool = False,
 ) -> None:
     """Write per-normal, per-allele evidence to an immutable BCF artifact."""
@@ -562,6 +599,7 @@ def write_pon_artifact(
                 else target_vcf.header.copy()
             )
             _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
+            write_reference_header(header, reference_identity)
             for sample_name in sample_names:
                 header.add_sample(sample_name)
 
@@ -677,8 +715,11 @@ def read_pon_evidence(
         if pon_file.format != "BCF":
             raise ValueError("PON artifact must be BCF")
         metadata = _parse_metadata(pon_file.header)
+        reference_contigs = {c.name for c in metadata.reference_identity.contigs}
         for record in pon_file:
             variant = _variant_from_record(record, source_label="PON artifact")
+            if variant.contig not in reference_contigs:
+                raise ValueError(f"PON artifact is missing reference identity for {variant.contig!r}")
 
             yield variant, tuple(
                 _evidence_from_sample(

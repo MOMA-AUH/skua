@@ -278,7 +278,8 @@ skua pon inspect hotspots.pon.bcf --json
 ```
 
 `inspect` reports the artifact format, index presence, schema and evidence
-policy versions, quality thresholds, producer version, and normal samples. It
+policy versions, quality thresholds, producer version, normal samples, and
+stored reference identity and verification status. It
 is intentionally permissive: it can describe an incompatible artifact without
 claiming that the installed Skua can use it.
 
@@ -346,8 +347,43 @@ policies 1, 2, or 3 are rejected
 by annotation and validation, but can still be inspected. Rebuild them from the
 original target VCF and normal BAM/CRAM files using `skua pon build` (add `--force`
 to replace an existing PON). Changing the header version is not sufficient:
-cached counts must be recomputed under the new policy. The PON schema remains
-version 1.
+cached counts must be recomputed under the new policy.
+
+The PON schema is now **version 2**, with required reference metadata. Schema-1
+panels (including those made by v0.7.3 with evidence policy 4) can still be
+inspected, but must be rebuilt from the original targets and normal alignments
+before annotation or validation. A header-only upgrade cannot establish the
+reference metadata of the original normal inputs.
+
+#### Reference compatibility
+
+For the contigs used by supported target alleles, Skua compares alignment `@SQ`
+lengths and available `M5` checksums, plus available VCF contig `length` and `md5`
+metadata. Conflicting values fail before output publication, including forced
+replacement. Unused contigs do not need to match; separate-VCF cached annotation
+checks the contigs used by that subset. Contig names must match exactly.
+
+With `--reference`, Skua retains the target REF-base checks and also calculates
+whole-contig sequence checksums in bounded chunks, following the
+[SAM reference MD5 convention](https://samtools.github.io/hts-specs/SAMv1.pdf).
+This identifies the sequence rather than the FASTA file's path or formatting.
+
+VCF outputs and PONs contain `SKUA_REFERENCE_STATUS` and per-contig
+`SKUA_REFERENCE` header records. `VERIFIED` means that all participating
+alignment/PON identities have matching lengths and sequence checksums on the
+used contigs, including the supplied FASTA when present. This verifies reference
+metadata; it does not independently establish that the reads were aligned to
+the declared sequence. Without a FASTA, target REF bases are not checked against
+the full sequence.
+
+Missing alignment checksums or reference metadata are allowed and reported as
+`INSUFFICIENT_METADATA`, even when lengths agree or a FASTA supplies a checksum.
+Names or matching target REF bases alone are never reported as verified
+reference identity. PON construction retains this limitation per contig, and a
+later case/FASTA cannot upgrade unverifiable normal metadata. `pon inspect`
+reports the stored build status; `pon validate` checks available supplied
+reference and target metadata and reports definite conflicts as validation
+errors. Structural validity does not imply verified reference identity.
 
 ## Python API
 

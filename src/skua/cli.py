@@ -409,6 +409,9 @@ def _format_pon_inspection(inspection: PonInspection) -> str:
             f"Minimum base quality: {value_or_missing(inspection.min_baseq)}",
             f"Minimum mapping quality: {value_or_missing(inspection.min_mapq)}",
             f"Skua version: {value_or_missing(inspection.skua_version)}",
+            "Reference status: " + (
+                inspection.reference_identity.status if inspection.reference_identity else "<missing or invalid>"
+            ),
             f"Normal samples ({len(inspection.sample_names)}): {sample_names}",
         )
     )
