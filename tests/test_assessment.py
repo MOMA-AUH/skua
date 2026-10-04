@@ -210,7 +210,7 @@ def test_cli_assessment_preserves_counts_and_scores(
             alignment, targets, normal_alignments=normal_alignments,
             prior_artifact_probability=0.001,
             assessment_thresholds=skua.AssessmentThresholds(**thresholds),
-        ))
+        ))["records"]
     assert row["stats"]["assessment_status"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
     assert row["stats"]["assessment_reasons"] == list(reasons)
     assert row["counts"]["case"]["usable"] == case_depth
