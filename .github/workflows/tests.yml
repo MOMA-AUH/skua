@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   pytest:
+    name: ${{ matrix.check-name || format('pytest ({0})', matrix.python-version) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,6 +23,7 @@ jobs:
         include:
           - python-version: "3.11"
             pysam: "0.22.0"
+            check-name: pytest (3.11, minimum pysam)
 
     steps:
       - name: Check out repository
