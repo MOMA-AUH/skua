@@ -1,6 +1,6 @@
 from skua.evidence import AggregatedEvidence
 from skua import compute_stats
-from skua.stats import Stats, estimate_rho, truncated_normal_evidences
+from skua.stats import Stats, aggregate_evidence, estimate_rho, truncated_normal_evidences
 import sys
 import pytest
 
@@ -216,86 +216,6 @@ def _make_normal(alt_fw: int, alt_bw: int, depth: int) -> AggregatedEvidence:
     )
 
 
-def _estimate_rho_reference(
-    per_sample_evidences: list[AggregatedEvidence],
-    *,
-    truncate: float = 0.1,
-    rho_min: float = 1e-4,
-    rho_max: float = 0.1,
-    pseudo: float = sys.float_info.epsilon,
-) -> float:
-    ncol = 2
-    total_depth_by_sample = [
-        sample.alt_forward
-        + sample.alt_reverse
-        + sample.non_alt_forward
-        + sample.non_alt_reverse
-        for sample in per_sample_evidences
-    ]
-    x_by_channel = [
-        [sample.alt_forward + sample.alt_reverse for sample in per_sample_evidences],
-        [sample.non_alt_forward + sample.non_alt_reverse for sample in per_sample_evidences],
-    ]
-    total_depth_all = sum(total_depth_by_sample)
-
-    rho_by_channel: list[float] = []
-    for channel_index in range(ncol):
-        mu_values = [
-            (x_by_channel[channel_index][sample_index] + pseudo)
-            / (total_depth_by_sample[sample_index] + ncol * pseudo)
-            for sample_index in range(len(per_sample_evidences))
-        ]
-        included = [mu_value < truncate for mu_value in mu_values]
-        included_count = sum(included)
-        if included_count < 2:
-            rho_by_channel.append(rho_min)
-            continue
-
-        xix = sum(
-            x_by_channel[channel_index][sample_index]
-            for sample_index in range(len(per_sample_evidences))
-            if included[sample_index]
-        )
-        nu = (xix + pseudo) / (total_depth_all + ncol * pseudo)
-
-        valid_depths = [
-            total_depth_by_sample[sample_index]
-            for sample_index in range(len(per_sample_evidences))
-            if included[sample_index] and total_depth_by_sample[sample_index] > 0
-        ]
-        valid_mu = [
-            mu_values[sample_index]
-            for sample_index in range(len(per_sample_evidences))
-            if included[sample_index] and total_depth_by_sample[sample_index] > 0
-        ]
-        if not valid_depths:
-            rho_by_channel.append(rho_min)
-            continue
-
-        s2 = (
-            included_count
-            * sum(
-                valid_depths[value_index] * (valid_mu[value_index] - nu) ** 2
-                for value_index in range(len(valid_depths))
-            )
-            / ((included_count - 1) * sum(valid_depths))
-        )
-        sum_inv_nix = sum(1.0 / depth for depth in valid_depths)
-        denom = included_count - sum_inv_nix
-        if denom <= 0 or nu <= 0.0 or nu >= 1.0:
-            rho_by_channel.append(rho_min)
-            continue
-
-        rho_hat = (included_count * (s2 / nu / (1.0 - nu)) - sum_inv_nix) / denom
-        if not sys.float_info.max > abs(rho_hat) or rho_hat != rho_hat:
-            rho_by_channel.append(rho_min)
-            continue
-
-        rho_by_channel.append(min(max(min(max(rho_hat, 0.0), 1.0), rho_min), rho_max))
-
-    return rho_by_channel[0]
-
-
 def test_estimate_rho_empty_returns_rho_min() -> None:
     assert estimate_rho([]) == 1e-4
 
@@ -311,10 +231,44 @@ def test_estimate_rho_uniform_low_background_returns_rho_min() -> None:
     assert rho == 1e-4
 
 
+@pytest.mark.parametrize("variable_background", [False, True])
+@pytest.mark.parametrize(
+    "excluded_counts",
+    [
+        [(50, 50, 1000)] * 5,  # Exactly at the truncation threshold.
+        [(500, 500, 10000)] * 5,  # Same ALT fraction, greater depth.
+        [(100, 50, 1000), (2000, 1000, 10000)],  # Above the threshold.
+    ],
+)
+def test_excluded_normals_do_not_change_dispersion_or_scores(
+    variable_background, excluded_counts,
+) -> None:
+    retained = [_make_normal(10, 10, 1000) for _ in range(5)]
+    if variable_background:
+        retained += [_make_normal(40, 40, 1000) for _ in range(5)]
+    case = _make_normal(10, 10, 200)
+    baseline = compute_stats(
+        case, aggregate_evidence(retained), per_sample_evidences=retained,
+    )
+    normals = retained + [_make_normal(*counts) for counts in excluded_counts]
+    stats = compute_stats(
+        case, aggregate_evidence(normals), per_sample_evidences=normals,
+    )
+
+    assert truncated_normal_evidences(normals) == retained
+    assert estimate_rho(normals) == pytest.approx(estimate_rho(retained))
+    assert stats.dispersion_rho == pytest.approx(baseline.dispersion_rho)
+    assert stats.normal_counts == baseline.normal_counts
+    assert stats.log_bayes_factor_artifact_vs_variant == pytest.approx(
+        baseline.log_bayes_factor_artifact_vs_variant,
+    )
+    assert stats.artifact_posterior == pytest.approx(baseline.artifact_posterior)
+
+
 def test_estimate_rho_overdispersed_samples_returns_higher_rho() -> None:
-    # Half samples with ~1% error, half with ~5% error -> measurable overdispersion
-    low = [_make_normal(10, 10, 1000) for _ in range(5)]   # ~2%
-    high = [_make_normal(50, 50, 1000) for _ in range(5)]  # ~10% -> truncated
+    # Both the 2% and 8% groups are retained and contribute real variation.
+    low = [_make_normal(10, 10, 1000) for _ in range(5)]
+    high = [_make_normal(40, 40, 1000) for _ in range(5)]
     rho = estimate_rho(low + high)
     assert rho > 1e-4
 
@@ -325,16 +279,62 @@ def test_estimate_rho_result_is_within_bounds() -> None:
     assert 1e-4 <= rho <= 0.1
 
 
-def test_estimate_rho_matches_reference_two_channel_formula() -> None:
-    samples = [
-        _make_normal(1, 0, 120),
-        _make_normal(2, 1, 140),
-        _make_normal(3, 0, 160),
-        _make_normal(4, 1, 180),
-        _make_normal(12, 8, 150),
-    ]
+@pytest.mark.parametrize(
+    ("counts", "rho", "log_bayes_factor", "posterior"),
+    [
+        ([(10, 10, 1000)] * 5,
+         1e-4, -15.199404710030649, 2.5060071016458127e-7),
+        ([(10, 10, 1000)] * 5 + [(40, 40, 1000)] * 5,
+         0.020072704283230606, -1.5856301824479715, 0.16999958817075578),
+        ([(1, 0, 120), (2, 1, 140), (3, 0, 160), (4, 1, 180)],
+         1e-4, -12.199449784340686, 5.033198870934455e-6),
+    ],
+)
+def test_scores_are_preserved_when_all_normals_are_retained(
+    counts, rho, log_bayes_factor, posterior,
+) -> None:
+    # Baselines captured at v0.7.4 (0ab3cef), with no excluded normals.
+    samples = [_make_normal(*values) for values in counts]
+    stats = compute_stats(
+        _make_normal(10, 10, 200), aggregate_evidence(samples),
+        per_sample_evidences=samples,
+    )
 
-    assert estimate_rho(samples) == _estimate_rho_reference(samples)
+    assert truncated_normal_evidences(samples) == samples
+    assert estimate_rho(samples) == pytest.approx(rho)
+    assert stats.dispersion_rho == pytest.approx(rho)
+    assert stats.log_bayes_factor_artifact_vs_variant == pytest.approx(log_bayes_factor)
+    assert stats.artifact_posterior == pytest.approx(posterior)
+
+
+def test_estimate_rho_preserves_pseudocount_with_excluded_normals() -> None:
+    retained = [_make_normal(10, 10, 1000) for _ in range(5)]
+    retained += [_make_normal(40, 40, 1000) for _ in range(5)]
+    excluded = [_make_normal(50, 50, 1000), _make_normal(2000, 1000, 10000)]
+    # v0.7.4 baseline with pseudo=0.5 and only the retained panel.
+    expected = 0.02001653472902874
+    assert estimate_rho(retained, pseudo=0.5) == pytest.approx(expected)
+    assert estimate_rho(retained + excluded, pseudo=0.5) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("retained_count", [0, 1])
+@pytest.mark.parametrize("truncate", [0.1, 0.2])
+def test_estimate_rho_falls_back_with_fewer_than_two_retained_normals(
+    retained_count, truncate,
+) -> None:
+    retained = [_make_normal(10, 10, 1000) for _ in range(retained_count)]
+    excluded = [_make_normal(100, 100, 1000), _make_normal(2000, 1000, 10000)]
+    assert estimate_rho(retained + excluded, truncate=truncate, rho_min=0.002) == 0.002
+
+
+@pytest.mark.parametrize(("rho_min", "rho_max", "expected"), [(0.03, 0.1, 0.03), (1e-4, 0.01, 0.01)])
+def test_estimate_rho_clips_retained_dispersion_to_configured_bounds(
+    rho_min, rho_max, expected,
+) -> None:
+    retained = [_make_normal(10, 10, 1000) for _ in range(5)]
+    retained += [_make_normal(40, 40, 1000) for _ in range(5)]
+    excluded = [_make_normal(500, 500, 10000)]
+    assert estimate_rho(retained + excluded, rho_min=rho_min, rho_max=rho_max) == expected
 
 
 def test_compute_stats_uses_estimated_rho_from_per_sample_evidences() -> None:

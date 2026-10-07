@@ -126,6 +126,23 @@ qualities are unusable rather than ALT or reference evidence.
 
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
+Starting with **v0.8.0**, the dispersion estimator uses the same retained normals
+for both counts and depth in its mean. Previously, excluded normals still
+contributed depth to that mean and could inflate dispersion and change scores.
+Adding, removing, or changing normals that remain excluded now leaves dispersion,
+retained counts, log Bayes factor, and artifact posterior unchanged. Results are
+unchanged when no normals are excluded; dispersion bounds and the fallback for
+fewer than two retained normals are also unchanged.
+
+This correction changes the scoring model. Re-annotate existing calls to obtain
+the corrected `SKUA_PON_DISPERSION_FACTOR`, `SKUA_LOG_BAYES_FACTOR`, and
+`SKUA_ARTIFACT_POSTERIOR` values; use `--force` when refreshing existing Skua
+annotations. PONs compatible with v0.7.4 (schema 2, evidence policy 7) remain
+compatible and do not need rebuilding solely for this change: they store
+per-normal counts, and dispersion is recomputed at annotation time. Direct-normal
+and cached-PON annotation apply the same correction. Older incompatible PONs
+still require rebuilding as described below.
+
 Output FORMAT fields:
 - `SKUA_ALT_FWD`: Count of ALT-supporting reads on forward strand
 - `SKUA_ALT_REV`: Count of ALT-supporting reads on reverse strand
