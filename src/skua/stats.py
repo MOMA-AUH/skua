@@ -209,9 +209,10 @@ def estimate_rho(
 ) -> float:
     """Estimate beta-binomial overdispersion (rho) from per-sample PON evidence.
 
-    Implements the method-of-moments estimator from Shearwater's estimateRho(),
+    Adapts the method-of-moments estimator from Shearwater's estimateRho(),
     using a two-channel tensor-like representation of the available evidence:
     alt and non-alt, each combined across strands for rho estimation.
+    Each channel's mean uses counts and depths from the same retained normals.
     Returns the alt-channel rho bounded to [rho_min, rho_max].
     """
     _validate_model_parameters(truncate=truncate)
@@ -234,8 +235,6 @@ def estimate_rho(
         [sample.alt_forward + sample.alt_reverse for sample in per_sample_evidences],
         [sample.non_alt_forward + sample.non_alt_reverse for sample in per_sample_evidences],
     ]
-    total_depth_all = sum(total_depth_by_sample)
-
     rho_by_channel: list[float] = []
     for channel_index in range(ncol):
         mu_values = [
@@ -254,7 +253,12 @@ def estimate_rho(
             for sample_index in range(len(per_sample_evidences))
             if included[sample_index]
         )
-        nu = (xix + pseudo) / (total_depth_all + ncol * pseudo)
+        retained_depth = sum(
+            total_depth_by_sample[sample_index]
+            for sample_index in range(len(per_sample_evidences))
+            if included[sample_index]
+        )
+        nu = (xix + pseudo) / (retained_depth + ncol * pseudo)
 
         valid_depths = [
             total_depth_by_sample[sample_index]

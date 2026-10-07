@@ -970,6 +970,58 @@ def test_precomputed_pon_matches_live_normal_annotation(tmp_path) -> None:
             assert cached.samples["CASE"][field] == live.samples["CASE"][field]
 
 
+def test_excluded_normals_leave_live_and_cached_scores_unchanged(tmp_path) -> None:
+    target_path = tmp_path / "targets.vcf"
+    pon_path = tmp_path / "panel.bcf"
+    baseline_path = tmp_path / "baseline.vcf"
+    _write_targets(target_path)
+
+    def alignment(name, alt_per_strand, depth_per_strand):
+        return _normal(name, [
+            _read(sequence, reverse=reverse)
+            for reverse in (False, True)
+            for sequence, count in (
+                ("AAAAATAAAA", alt_per_strand),
+                ("AAAAAAAAAA", depth_per_strand - alt_per_strand),
+            )
+            for _ in range(count)
+        ])
+
+    case = alignment("CASE", 10, 100)
+    retained = [alignment(f"N{i}", 10, 500) for i in range(5)]
+    normals = retained + [
+        alignment("AT_THRESHOLD", 50, 500),
+        alignment("ABOVE_THRESHOLD", 100, 500),
+    ]
+    annotate_vcf_with_normals(
+        case, target_path, normal_alignments=retained, output_path=baseline_path,
+    )
+    build_pon(target_path, normal_alignments=normals, output_path=pon_path)
+    with pysam.VariantFile(str(baseline_path)) as baseline_vcf:
+        baseline = next(iter(baseline_vcf))
+        assert baseline.info["SKUA_PON_SAMPLE_COUNT"] == 5
+        assert baseline.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
+        assert baseline.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(
+            2.5060071016458127e-7,
+        )
+
+        for mode in ("live", "pon", "vcf-pon"):
+            output_path = tmp_path / f"{mode}.vcf"
+            if mode == "live":
+                annotate_vcf_with_normals(
+                    case, target_path, normal_alignments=normals, output_path=output_path,
+                )
+            else:
+                annotate_vcf_with_pon(
+                    case, pon_path, output_path=output_path,
+                    vcf_path=target_path if mode == "vcf-pon" else None,
+                )
+            with pysam.VariantFile(str(output_path)) as output_vcf:
+                record = next(iter(output_vcf))
+                assert dict(record.info) == dict(baseline.info), mode
+                assert dict(record.samples["CASE"]) == dict(baseline.samples["CASE"]), mode
+
+
 def test_annotate_vcf_with_pon_uses_artifact_evidence_thresholds(tmp_path) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"
