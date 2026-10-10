@@ -105,7 +105,7 @@ The value must be finite and strictly between `0` and `1`. An absent field or
 `.` uses `--prior-artifact-probability`; an explicit record value takes
 precedence. Skua writes the effective value to every annotated output record so
 the artifact posterior can be reproduced. The artifact prior affects
-`SKUA_ARTIFACT_POSTERIOR` but does not affect `SKUA_LOG_BAYES_FACTOR`.
+`SKUA_ARTIFACT_POSTERIOR` but does not affect `SKUA_LBF`.
 
 Artifact priors must be calibrated and independent of the case-read and PON
 evidence evaluated by Skua. Deriving a prior from the same evidence would count
@@ -169,7 +169,7 @@ unchanged when no normals are excluded; dispersion bounds and the fallback for
 fewer than two retained normals are also unchanged.
 
 This correction changes the scoring model. Re-annotate existing calls to obtain
-the corrected `SKUA_PON_DISPERSION_FACTOR`, `SKUA_LOG_BAYES_FACTOR`, and
+the corrected `SKUA_PON_RHO`, `SKUA_LBF`, and
 `SKUA_ARTIFACT_POSTERIOR` values; use `--force` when refreshing existing Skua
 annotations. The v0.8.0 scoring correction alone did not require rebuilding
 PONs: they store per-normal counts, and dispersion is recomputed at annotation
@@ -185,9 +185,9 @@ Output FORMAT fields:
 - `SKUA_USABLE`: Total usable reads at this locus
 - `SKUA_UNUSABLE`: Total unusable reads (low quality, INDELs at locus, etc.)
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1); missing when evidence is insufficient
-- `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models; missing when evidence is insufficient
-- `SKUA_ASSESSMENT_STATUS`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
-- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; present with value `.` when there are no reasons
+- `SKUA_LBF`: Natural log Bayes factor comparing artifact vs. variant models; positive favors artifact, negative favors variant; missing when evidence is insufficient
+- `SKUA_ASSESSMENT`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
+- `SKUA_REASONS`: Unmet evidence requirements; present with value `.` when there are no reasons
 
 Output INFO fields:
 - `SKUA_ARTIFACT_PRIOR`: Effective prior probability that the ALT allele is an artifact before Skua evidence
@@ -195,7 +195,10 @@ Output INFO fields:
 - `SKUA_PON_SAMPLE_COUNT`: Number of normal samples included after truncation
 - `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`: Aggregated read counts across normals
 - `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE`: Aggregated usable/unusable counts
-- `SKUA_PON_DISPERSION_FACTOR`: Beta-binomial dispersion parameter estimate
+- `SKUA_PON_RHO`: Beta-binomial dispersion parameter rho estimate
+
+Version 1.0.0 shortens four VCF field names. Update downstream field selectors
+using the [migration table](docs/releases/v1.0.0.md#vcf-field-renames).
 
 By default, unsupported records do not stop the run. Use `--strict` to reject any input containing one before an output file is created. VCF output is written to `--output` or standard output.
 
@@ -203,7 +206,7 @@ By default, unsupported records do not stop the run. Use `--strict` to reject an
 
 `SKUA_STATUS=ANNOTATED` means the allele is supported and its evidence was
 collected. Model eligibility is reported separately in the selected sample's
-`SKUA_ASSESSMENT_STATUS`. An unsupported allele retains its `UNSUPPORTED_*`
+`SKUA_ASSESSMENT`. An unsupported allele retains its `UNSUPPORTED_*`
 record status and receives no new assessment or score fields. Unselected samples
 have missing assessment values. The evidence-only Python APIs do not assess a
 model; absence of an assessment must not be interpreted as `ASSESSED`.
@@ -239,13 +242,13 @@ depth, sample-count, and strand requirements through assay validation.
 `ASSESSED` means those configured requirements were met, not that the assay or
 variant call has been validated.
 
-All failing requirements are reported in `SKUA_ASSESSMENT_REASONS`, in this
+All failing requirements are reported in `SKUA_REASONS`, in this
 order: `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 `CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`. Tightening the assessment thresholds
 can make scores missing; counts are unchanged. Scores for records that remain
 `ASSESSED` are unchanged.
 
-`SKUA_ASSESSMENT_REASONS` appears in the FORMAT of every supported record
+`SKUA_REASONS` appears in the FORMAT of every supported record
 annotated with live normals or a cached PON. Its value is `.` when the selected
 case is `ASSESSED`, or the list of unmet requirements otherwise. Other samples
 have `.`. Unsupported records and case-only evidence annotation receive no
@@ -259,7 +262,7 @@ sample = record.samples["CASE"]
 posterior = sample.get("SKUA_ARTIFACT_POSTERIOR")
 accept = (
     record.info.get("SKUA_STATUS") == "ANNOTATED"
-    and sample.get("SKUA_ASSESSMENT_STATUS") == "ASSESSED"
+    and sample.get("SKUA_ASSESSMENT") == "ASSESSED"
     and posterior is not None
     and posterior < 0.01  # Example only; validate the cutoff for your assay.
 )

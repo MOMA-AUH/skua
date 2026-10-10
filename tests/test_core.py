@@ -686,6 +686,10 @@ def test_annotate_vcf_late_failure_does_not_publish_a_partial_output(
     + [
         '##INFO=<ID=SKUA_UNUSED,Number=1,Type=Integer,Description="Unused">',
         '##FORMAT=<ID=SKUA_UNUSED_FMT,Number=1,Type=Integer,Description="Unused">',
+        '##INFO=<ID=SKUA_PON_DISPERSION_FACTOR,Number=1,Type=Float,Description="Legacy">',
+        '##FORMAT=<ID=SKUA_LOG_BAYES_FACTOR,Number=1,Type=Float,Description="Legacy">',
+        '##FORMAT=<ID=SKUA_ASSESSMENT_STATUS,Number=1,Type=String,Description="Legacy">',
+        '##FORMAT=<ID=SKUA_ASSESSMENT_REASONS,Number=.,Type=String,Description="Legacy">',
     ],
 )
 def test_annotate_vcf_rejects_preannotated_input(definition, tmp_path) -> None:
@@ -1029,10 +1033,10 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
         assert sample["SKUA_NON_ALT_REV"] == 0
         assert sample["SKUA_USABLE"] == 1
         assert sample["SKUA_UNUSABLE"] == 0
-        assert sample["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
-        assert sample["SKUA_ASSESSMENT_REASONS"] == ("NORMAL_DEPTH",)
+        assert sample["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+        assert sample["SKUA_REASONS"] == ("NORMAL_DEPTH",)
         assert sample["SKUA_ARTIFACT_POSTERIOR"] is None
-        assert sample["SKUA_LOG_BAYES_FACTOR"] is None
+        assert sample["SKUA_LBF"] is None
 
 
 def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_path) -> None:
@@ -1551,7 +1555,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         sample = record.samples["CASE"]
         assert sample["SKUA_ALT_FWD"] == 1
         assert 0.0 <= sample["SKUA_ARTIFACT_POSTERIOR"] <= 1.0
-        assert isinstance(sample["SKUA_LOG_BAYES_FACTOR"], float)
+        assert isinstance(sample["SKUA_LBF"], float)
         assert record.info["SKUA_PON_SAMPLE_COUNT"] == 1
         assert record.info["SKUA_PON_ALT_FWD"] == 0
         assert record.info["SKUA_PON_ALT_REV"] == 0
@@ -1559,7 +1563,7 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         assert record.info["SKUA_PON_NON_ALT_REV"] == 0
         assert record.info["SKUA_PON_USABLE"] == 1
         assert record.info["SKUA_PON_UNUSABLE"] == 1
-        assert record.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
+        assert record.info["SKUA_PON_RHO"] == pytest.approx(1e-4)
 
 
 @pytest.mark.parametrize("has_evidence", [False, True])
@@ -1622,15 +1626,15 @@ def test_annotate_vcf_with_normals_uses_and_writes_effective_artifact_priors(
         # With one reference fragment in case and normal, the Bayes factor is
         # approximately 2; priors affect the posterior but not that factor.
         assert [
-            record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] for record in records
+            record.samples["CASE"]["SKUA_LBF"] for record in records
         ] == pytest.approx([0.693146, 0.693146, 0.693146], rel=1e-5)
         assert [
             record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
         ] == pytest.approx([1 / 3, 0.4, 0.4], rel=1e-5)
     else:
         for record in records:
-            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
-            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
+            assert record.samples["CASE"]["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_LBF"] is None
             assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
 
 

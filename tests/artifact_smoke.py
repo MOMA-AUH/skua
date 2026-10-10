@@ -91,19 +91,21 @@ def exercise(root: Path, reference: Path, targets: Path, suffix: str) -> list:
         assert sample["SKUA_ALT_FWD"] == sample["SKUA_ALT_REV"] == 1
         assert sample["SKUA_NON_ALT_FWD"] == sample["SKUA_NON_ALT_REV"] == 1
         assert sample["SKUA_USABLE"] == 4
-        assert sample["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
-        assert sample["SKUA_ASSESSMENT_REASONS"] == (".",)
+        assert sample["SKUA_ASSESSMENT"] == "ASSESSED"
+        assert sample["SKUA_REASONS"] == (".",)
         assert info["SKUA_PON_USABLE"] == 10
         assert info["SKUA_PON_SAMPLE_COUNT"] == 1
+        assert 0 < info["SKUA_PON_RHO"] < 1
+        assert isinstance(sample["SKUA_LBF"], float)
         assert sample["SKUA_ARTIFACT_POSTERIOR"] is not None
         assert values[1][1]["SKUA_ALT_FWD"] == values[1][1]["SKUA_ALT_REV"] == 0
         uncovered_info, uncovered_sample = values[2]
         assert uncovered_info["SKUA_STATUS"] == "ANNOTATED"
         assert uncovered_info["SKUA_PON_USABLE"] == uncovered_sample["SKUA_USABLE"] == 0
-        assert uncovered_sample["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
-        assert uncovered_sample["SKUA_ASSESSMENT_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
+        assert uncovered_sample["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+        assert uncovered_sample["SKUA_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
         assert uncovered_sample["SKUA_ARTIFACT_POSTERIOR"] is None
-        assert uncovered_sample["SKUA_LOG_BAYES_FACTOR"] is None
+        assert uncovered_sample["SKUA_LBF"] is None
         results.append(values)
     assert results[0] == results[1] == results[2], "Direct/cached evidence or scores differ"
     return results[0]

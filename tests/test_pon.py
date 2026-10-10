@@ -750,9 +750,9 @@ def test_pon_preserves_and_uses_target_artifact_prior(tmp_path, has_evidence) ->
             # One reference fragment per sample gives a Bayes factor near 2.
             assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(8 / 9, rel=1e-5)
         else:
-            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
             assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
-            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
+            assert record.samples["CASE"]["SKUA_LBF"] is None
 
 
 def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_evidence(
@@ -882,9 +882,9 @@ def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path, ha
         ] == pytest.approx([1 / 3, 4 / 7], rel=1e-5)
     else:
         for record in records:
-            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
             assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
-            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
+            assert record.samples["CASE"]["SKUA_LBF"] is None
 
 
 def test_annotate_vcf_with_pon_rejects_input_variant_missing_from_pon_before_output(
@@ -968,7 +968,7 @@ def test_precomputed_pon_matches_live_normal_annotation(tmp_path) -> None:
             "SKUA_PON_NON_ALT_REV",
             "SKUA_PON_USABLE",
             "SKUA_PON_UNUSABLE",
-            "SKUA_PON_DISPERSION_FACTOR",
+            "SKUA_PON_RHO",
         ):
             assert cached.info[field] == live.info[field]
         for field in (
@@ -978,7 +978,7 @@ def test_precomputed_pon_matches_live_normal_annotation(tmp_path) -> None:
             "SKUA_NON_ALT_REV",
             "SKUA_USABLE",
             "SKUA_UNUSABLE",
-            "SKUA_LOG_BAYES_FACTOR",
+            "SKUA_LBF",
             "SKUA_ARTIFACT_POSTERIOR",
         ):
             assert cached.samples["CASE"][field] == live.samples["CASE"][field]
@@ -1014,7 +1014,7 @@ def test_excluded_normals_leave_live_and_cached_scores_unchanged(tmp_path) -> No
     with pysam.VariantFile(str(baseline_path)) as baseline_vcf:
         baseline = next(iter(baseline_vcf))
         assert baseline.info["SKUA_PON_SAMPLE_COUNT"] == 5
-        assert baseline.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
+        assert baseline.info["SKUA_PON_RHO"] == pytest.approx(1e-4)
         assert baseline.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(
             2.5060071016458127e-7,
         )

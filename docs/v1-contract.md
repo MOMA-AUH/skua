@@ -224,14 +224,19 @@ fields require live normals or a cached PON. Counts are nonnegative integers.
 | --- | --- | --- | --- |
 | FORMAT `SKUA_ALT_FWD`, `SKUA_ALT_REV`, `SKUA_NON_ALT_FWD`, `SKUA_NON_ALT_REV` | 1 | Integer | Selected case strand counts. |
 | FORMAT `SKUA_USABLE`, `SKUA_UNUSABLE` | 1 | Integer | Case usable/unusable evidence; usable equals the four strand counts' sum. |
-| FORMAT `SKUA_LOG_BAYES_FACTOR`, `SKUA_ARTIFACT_POSTERIOR` | 1 | Float | Artifact-versus-variant log evidence and artifact probability; missing (`.`) when evidence is insufficient. |
-| FORMAT `SKUA_ASSESSMENT_STATUS` | 1 | String | `ASSESSED` or `INSUFFICIENT_EVIDENCE`. |
-| FORMAT `SKUA_ASSESSMENT_REASONS` | . | String | All unmet requirements; present on every model-annotated record, with value `.` when assessed. |
+| FORMAT `SKUA_LBF` | 1 | Float | Natural log Bayes factor, artifact versus variant; positive favors artifact, negative favors variant. Missing (`.`) when evidence is insufficient. |
+| FORMAT `SKUA_ARTIFACT_POSTERIOR` | 1 | Float | Artifact probability; missing (`.`) when evidence is insufficient. |
+| FORMAT `SKUA_ASSESSMENT` | 1 | String | `ASSESSED` or `INSUFFICIENT_EVIDENCE`. |
+| FORMAT `SKUA_REASONS` | . | String | All unmet requirements; present on every model-annotated record, with value `.` when assessed. |
 | INFO `SKUA_STATUS` | 1 | String | Annotation outcome for every record. |
 | INFO `SKUA_ARTIFACT_PRIOR` | A | Float | Effective allele prior, strictly between 0 and 1. |
 | INFO `SKUA_PON_SAMPLE_COUNT` | 1 | Integer | Number of retained normals. |
 | INFO `SKUA_PON_ALT_FWD`, `SKUA_PON_ALT_REV`, `SKUA_PON_NON_ALT_FWD`, `SKUA_PON_NON_ALT_REV`, `SKUA_PON_USABLE`, `SKUA_PON_UNUSABLE` | 1 | Integer | Pooled normal evidence after truncation. |
-| INFO `SKUA_PON_DISPERSION_FACTOR` | 1 | Float | Dispersion rho estimated at annotation time. |
+| INFO `SKUA_PON_RHO` | 1 | Float | Beta-binomial dispersion parameter rho estimated at annotation time. |
+
+Four field names changed at the v1 boundary; see the
+[migration table](releases/v1.0.0.md#vcf-field-renames). V1 emits only the new
+names, and forced reannotation removes the old generated fields.
 
 `AnnotationStatus` values are `ANNOTATED`, `UNSUPPORTED_RECORD`,
 `UNSUPPORTED_MULTIALLELIC`, `UNSUPPORTED_SYMBOLIC_ALLELE`, `UNSUPPORTED_BREAKEND`,
