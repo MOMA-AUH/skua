@@ -73,6 +73,21 @@ def test_assessment_thresholds_gate_scores_and_preserve_counts(overrides, reason
         assert stats.log_bayes_factor_artifact_vs_variant == baseline.log_bayes_factor_artifact_vs_variant
 
 
+@pytest.mark.parametrize(("rho", "expected"), [(1e-8, 1e-6), (1 - 1e-8, 1 - 1e-6)])
+def test_assessment_thresholds_preserve_bounded_dispersion(rho, expected) -> None:
+    case, normal = _evidence(1, 1, 1, 1), _evidence(0, 0, 10, 10)
+    assessed = skua.compute_stats(case, normal, rho=rho)
+    insufficient = skua.compute_stats(
+        case, normal, rho=rho,
+        assessment_thresholds=skua.AssessmentThresholds(min_case_depth=5),
+    )
+    assert assessed.assessment_status == "ASSESSED"
+    assert insufficient.assessment_status == "INSUFFICIENT_EVIDENCE"
+    assert assessed.dispersion_rho == insufficient.dispersion_rho == expected
+    assert insufficient.artifact_posterior is None
+    assert insufficient.log_bayes_factor_artifact_vs_variant is None
+
+
 @pytest.mark.parametrize("name", [
     "min_case_depth", "min_normal_depth", "min_normal_samples",
     "min_case_strand_depth", "min_normal_strand_depth",

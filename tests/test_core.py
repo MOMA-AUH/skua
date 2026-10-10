@@ -1029,8 +1029,10 @@ def test_annotate_vcf_with_normals_adds_sample_for_site_only_vcf(tmp_path) -> No
         assert sample["SKUA_NON_ALT_REV"] == 0
         assert sample["SKUA_USABLE"] == 1
         assert sample["SKUA_UNUSABLE"] == 0
-        assert 0.0 <= sample["SKUA_ARTIFACT_POSTERIOR"] <= 1.0
-        assert isinstance(sample["SKUA_LOG_BAYES_FACTOR"], float)
+        assert sample["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+        assert sample["SKUA_ASSESSMENT_REASONS"] == ("NORMAL_DEPTH",)
+        assert sample["SKUA_ARTIFACT_POSTERIOR"] is None
+        assert sample["SKUA_LOG_BAYES_FACTOR"] is None
 
 
 def test_annotate_vcf_with_normals_requires_single_alignment_sample_name(tmp_path) -> None:
@@ -1560,15 +1562,24 @@ def test_annotate_vcf_with_normals_writes_info_and_format(tmp_path) -> None:
         assert record.info["SKUA_PON_DISPERSION_FACTOR"] == pytest.approx(1e-4)
 
 
+@pytest.mark.parametrize("has_evidence", [False, True])
 def test_annotate_vcf_with_normals_uses_and_writes_effective_artifact_priors(
-    tmp_path,
+    tmp_path, has_evidence,
 ) -> None:
     import pysam
 
     alignment_file = FakeAlignmentFile(
-        [],
+        [FakeRead(
+            mapping_quality=60, is_reverse=False, query_sequence="AAAAAAAAAA",
+            query_qualities=[35] * 10, aligned_pairs=build_linear_pairs(10, 100),
+            tags={"RG": "case-rg"},
+        )] if has_evidence else [],
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
     )
+    normal_alignments = [FakeAlignmentFile([FakeRead(
+        mapping_quality=60, is_reverse=False, query_sequence="AAAAAAAAAA",
+        query_qualities=[35] * 10, aligned_pairs=build_linear_pairs(10, 100),
+    )])] if has_evidence else []
     vcf_path = tmp_path / "input.vcf"
     vcf_path.write_text(
         "\n".join(
@@ -1593,7 +1604,7 @@ def test_annotate_vcf_with_normals_uses_and_writes_effective_artifact_priors(
     annotate_vcf_with_normals(
         alignment_file,
         compressed_vcf_path,
-        normal_alignments=[],
+        normal_alignments=normal_alignments,
         output_path=output_path,
         prior_artifact_probability=0.25,
     )
@@ -1607,12 +1618,20 @@ def test_annotate_vcf_with_normals_uses_and_writes_effective_artifact_priors(
     assert [record.info["SKUA_ARTIFACT_PRIOR"][0] for record in records] == pytest.approx(
         [0.2, 0.25, 0.25]
     )
-    assert [
-        record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] for record in records
-    ] == pytest.approx([0.0, 0.0, 0.0])
-    assert [
-        record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
-    ] == pytest.approx([0.2, 0.25, 0.25])
+    if has_evidence:
+        # With one reference fragment in case and normal, the Bayes factor is
+        # approximately 2; priors affect the posterior but not that factor.
+        assert [
+            record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] for record in records
+        ] == pytest.approx([0.693146, 0.693146, 0.693146], rel=1e-5)
+        assert [
+            record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
+        ] == pytest.approx([1 / 3, 0.4, 0.4], rel=1e-5)
+    else:
+        for record in records:
+            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
+            assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
 
 
 @pytest.mark.parametrize(

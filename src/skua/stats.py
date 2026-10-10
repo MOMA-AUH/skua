@@ -396,8 +396,9 @@ def compute_stats(
     )
     log_bayes_factor: float | None = None
     artifact_posterior: float | None = None
-    if not assessment_reasons:
+    if case_total > 0:
         rho = _bound(rho, 1e-6, 1 - 1e-6)
+    if not assessment_reasons:
         disp = (1.0 - rho) / rho
 
         mu = _bound(

@@ -708,7 +708,8 @@ def test_annotate_vcf_with_pon_counts_only_case_and_preserves_targets(tmp_path) 
         assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is not None
 
 
-def test_pon_preserves_and_uses_target_artifact_prior(tmp_path) -> None:
+@pytest.mark.parametrize("has_evidence", [False, True])
+def test_pon_preserves_and_uses_target_artifact_prior(tmp_path, has_evidence) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"
     output_path = tmp_path / "calls.vcf"
@@ -727,7 +728,7 @@ def test_pon_preserves_and_uses_target_artifact_prior(tmp_path) -> None:
     )
     build_pon(
         target_path,
-        normal_alignments=[_normal("N1", [])],
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")] if has_evidence else [])],
         output_path=pon_path,
     )
 
@@ -736,7 +737,7 @@ def test_pon_preserves_and_uses_target_artifact_prior(tmp_path) -> None:
         assert pon_record.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.8)
 
     case = FakeAlignmentFile(
-        [],
+        [_read("AAAAAAAAAA", read_group="case-rg")] if has_evidence else [],
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
         references=("chr1",),
     )
@@ -745,7 +746,13 @@ def test_pon_preserves_and_uses_target_artifact_prior(tmp_path) -> None:
     with pysam.VariantFile(str(output_path)) as calls:
         record = next(iter(calls))
         assert record.info["SKUA_ARTIFACT_PRIOR"][0] == pytest.approx(0.8)
-        assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(0.8)
+        if has_evidence:
+            # One reference fragment per sample gives a Bayes factor near 2.
+            assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(8 / 9, rel=1e-5)
+        else:
+            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
+            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
 
 
 def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_evidence(
@@ -812,7 +819,8 @@ def test_annotate_vcf_with_pon_uses_input_vcf_records_and_matching_cached_eviden
         assert record.samples["CASE"]["SKUA_ALT_FWD"] == 1
 
 
-def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path) -> None:
+@pytest.mark.parametrize("has_evidence", [False, True])
+def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path, has_evidence) -> None:
     target_path = tmp_path / "hotspots.vcf"
     pon_path = tmp_path / "hotspots.pon.bcf"
     input_path = tmp_path / "case-candidates.vcf"
@@ -846,11 +854,11 @@ def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path) ->
     )
     build_pon(
         target_path,
-        normal_alignments=[_normal("N1", [])],
+        normal_alignments=[_normal("N1", [_read("AAAAAAAAAA")] if has_evidence else [])],
         output_path=pon_path,
     )
     case = FakeAlignmentFile(
-        [],
+        [_read("AAAAAAAAAA", read_group="case-rg")] if has_evidence else [],
         header=FakeAlignmentHeader([{"ID": "case-rg", "SM": "CASE"}]),
         references=("chr1",),
     )
@@ -868,9 +876,15 @@ def test_input_vcf_artifact_prior_owns_cached_annotation_precedence(tmp_path) ->
     assert [record.info["SKUA_ARTIFACT_PRIOR"][0] for record in records] == pytest.approx(
         [0.2, 0.4]
     )
-    assert [
-        record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
-    ] == pytest.approx([0.2, 0.4])
+    if has_evidence:
+        assert [
+            record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] for record in records
+        ] == pytest.approx([1 / 3, 4 / 7], rel=1e-5)
+    else:
+        for record in records:
+            assert record.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+            assert record.samples["CASE"]["SKUA_ARTIFACT_POSTERIOR"] is None
+            assert record.samples["CASE"]["SKUA_LOG_BAYES_FACTOR"] is None
 
 
 def test_annotate_vcf_with_pon_rejects_input_variant_missing_from_pon_before_output(
