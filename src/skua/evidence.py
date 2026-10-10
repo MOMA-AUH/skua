@@ -133,11 +133,17 @@ _CIGAR_PADDING = 6
 
 @dataclass(frozen=True)
 class _AlignmentPositions:
-    """Operation-aware alignment positions reused across variant calls."""
+    """Aligned bases and compact CIGAR gaps reused across variant calls.
+
+    Each N/D operation occupies one pair, at its first reference position.
+    reference_gap_ends maps that pair's index to the exclusive reference end.
+    Interior gap positions are absent from the maps; lookup still returns None.
+    """
 
     pairs: tuple[tuple[int | None, int | None, int | None], ...]
     ref_to_query: dict[int, int | None]
     ref_to_pair_index: dict[int, int]
+    reference_gap_ends: dict[int, int]
 
 
 def _preferred_mate(
@@ -225,10 +231,11 @@ def _query_position_bases_and_qualities(
 
 
 def _alignment_positions(read: Any) -> _AlignmentPositions:
-    """Expand a read's CIGAR while retaining the operation behind each gap."""
+    """Map read bases and CIGAR boundaries without expanding reference gaps."""
     cigar = getattr(read, "cigartuples", None)
     reference_start = getattr(read, "reference_start", None)
     pairs: list[tuple[int | None, int | None, int | None]] = []
+    reference_gap_ends: dict[int, int] = {}
 
     if cigar is not None and reference_start is not None:
         query_pos = 0
@@ -256,10 +263,8 @@ def _alignment_positions(read: Any) -> _AlignmentPositions:
                 continue
 
             if cigar_op in {_CIGAR_DELETION, _CIGAR_REFERENCE_SKIP}:
-                pairs.extend(
-                    (None, ref_pos + offset, cigar_op)
-                    for offset in range(length)
-                )
+                reference_gap_ends[len(pairs)] = ref_pos + length
+                pairs.append((None, ref_pos, cigar_op))
                 ref_pos += length
                 continue
 
@@ -295,11 +300,12 @@ def _alignment_positions(read: Any) -> _AlignmentPositions:
         pairs=tuple(pairs),
         ref_to_query=ref_to_query,
         ref_to_pair_index=ref_to_pair_index,
+        reference_gap_ends=reference_gap_ends,
     )
 
 
 def _ref_position_map(read: Any) -> dict[int, int | None]:
-    """Map each reference position in the alignment to its query position or None."""
+    """Map aligned positions to query positions; gaps have no query position."""
     return _alignment_positions(read).ref_to_query
 
 
@@ -396,12 +402,12 @@ def _query_positions_for_insertion(
     return insertion_query_positions
 
 
-def _deleted_reference_positions(
+def _deleted_reference_span(
     alignment_positions: _AlignmentPositions,
     *,
     ref_pos0: int,
-) -> list[int] | None:
-    """Return a flanked CIGAR deletion after the anchor, or None if absent/unsafe."""
+) -> range | None:
+    """Return a compact flanked deletion range, or None if absent/unsafe."""
     anchor_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
     if anchor_pair_index is None:
         return None
@@ -416,28 +422,29 @@ def _deleted_reference_positions(
     ):
         return None
 
-    deleted_ref_positions: list[int] = []
+    deleted_start = ref_pos0 + 1
+    deleted_end = deleted_start
     pair_index = anchor_pair_index + 1
     while pair_index < len(alignment_positions.pairs):
         query_pos, ref_pos, cigar_op = alignment_positions.pairs[pair_index]
         if cigar_op != _CIGAR_DELETION:
             break
-        if query_pos is not None or ref_pos is None:
+        if query_pos is not None or ref_pos != deleted_end:
             return None
-        deleted_ref_positions.append(ref_pos)
+        deleted_end = alignment_positions.reference_gap_ends[pair_index]
         pair_index += 1
 
-    if not deleted_ref_positions or pair_index >= len(alignment_positions.pairs):
+    if deleted_end == deleted_start or pair_index >= len(alignment_positions.pairs):
         return None
 
     flank_query_pos, flank_ref_pos, flank_op = alignment_positions.pairs[pair_index]
     if (
         flank_query_pos is None
-        or flank_ref_pos != deleted_ref_positions[-1] + 1
+        or flank_ref_pos != deleted_end
         or flank_op not in _CIGAR_ALIGNED_OPS
     ):
         return None
-    return deleted_ref_positions
+    return range(deleted_start, deleted_end)
 
 
 def classify_variant_read(
@@ -615,23 +622,21 @@ def classify_variant_read(
         if reference_query_positions is not None:
             support = AlleleSupport.NON_ALT
         else:
-            deleted_ref_positions = _deleted_reference_positions(
+            deleted_ref_span = _deleted_reference_span(
                 alignment_positions,
                 ref_pos0=ref_pos0,
             )
-            if deleted_ref_positions is None:
+            if deleted_ref_span is None:
                 return ReadAlleleCall(
                     support=AlleleSupport.UNUSABLE,
                     is_reverse=read.is_reverse,
                     reason=UnusableReason.NO_BASE_AT_SITE,
                 )
 
-            expected_deleted_positions = list(
-                range(ref_pos0 + 1, ref_pos0 + ref_len)
-            )
+            expected_deleted_span = range(ref_pos0 + 1, ref_pos0 + ref_len)
             support = (
                 AlleleSupport.ALT
-                if deleted_ref_positions == expected_deleted_positions
+                if deleted_ref_span == expected_deleted_span
                 and anchor_bases == ref_base[:1]
                 else AlleleSupport.NON_ALT
             )
