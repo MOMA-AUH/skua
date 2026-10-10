@@ -268,12 +268,38 @@ the evidence being scored. Skua does not derive case-specific priors or alter
 FILTER based on scores.
 
 `SKUA_RUN` header schema 1 records the effective settings and versions, without
-input paths, sample identities or full-file hashes. `SKUA_REFERENCE_STATUS`
-is `VERIFIED` or `INSUFFICIENT_METADATA`; per-contig `SKUA_REFERENCE` records
-contain `ID`, `Verified`, and available `Length`/`MD5`. Verification compares
-declared alignment/PON identities on used contigs and a supplied FASTA; it does
-not prove how reads were aligned. Missing normal metadata cannot be upgraded by
-later supplying case/FASTA metadata. See [reference compatibility](../README.md#reference-compatibility).
+input paths, sample identities or full-file hashes.
+
+### Reference compatibility
+
+For the contigs used by supported target alleles, Skua compares alignment `@SQ`
+lengths and available `M5` checksums, plus available VCF contig `length` and `md5`
+metadata. Conflicting values fail before output publication, including forced
+replacement. Unused contigs do not need to match; separate-VCF cached annotation
+checks the contigs used by that subset. Contig names must match exactly.
+
+With `--reference`, Skua checks target REF bases and calculates
+whole-contig sequence checksums in bounded chunks, following the
+[SAM reference MD5 convention](https://samtools.github.io/hts-specs/SAMv1.pdf).
+This identifies the sequence rather than the FASTA file's path or formatting.
+
+VCF outputs and PONs contain `SKUA_REFERENCE_STATUS` and per-contig
+`SKUA_REFERENCE` header records containing `ID`, `Verified`, and available
+`Length`/`MD5`. `VERIFIED` means that all participating
+alignment/PON identities have matching lengths and sequence checksums on the
+used contigs, including the supplied FASTA when present. This verifies reference
+metadata; it does not independently establish that the reads were aligned to
+the declared sequence. Without a FASTA, target REF bases are not checked against
+the full sequence.
+
+Missing alignment checksums or reference metadata are allowed and reported as
+`INSUFFICIENT_METADATA`, even when lengths agree or a FASTA supplies a checksum.
+Names or matching target REF bases alone are never reported as verified
+reference identity. PON construction retains this limitation per contig, and a
+later case/FASTA cannot upgrade unverifiable normal metadata. `pon inspect`
+reports the stored build status; `pon validate` checks available supplied
+reference and target metadata and reports definite conflicts as validation
+errors. Structural validity does not imply verified reference identity.
 
 ## PON compatibility and rebuild decision
 
