@@ -4,6 +4,21 @@
 
 Implementation of the [shearwater](https://doi.org/10.1093/bioinformatics/btt750) statistical model to assess somatic variant evidence in aligned reads, with support for substitutions, MNVs, and left-anchored simple insertions and deletions. The **shearwater** authors named their algorithm after seabirds that fly long distances over the ocean, watching the water closely and eventually dive into the water to catch prey. Due to the heavy reuse of the algorithmic core, it is only natural to name this **skua** — a seabird that hunts and steals from other birds.
 
+## Supported workflow and compatibility
+
+Skua annotates supplied candidate alleles in paired-end targeted DNA data mapped
+with `bwa mem`. Build a fixed panel of normals once, then reuse its per-normal
+evidence across case samples. Candidate discovery, automatic VCF FILTER
+decisions, multiallelic scoring, UMI consensus generation, and parallel execution
+are outside the v1 contract.
+
+The [v1 contract](docs/v1-contract.md) defines the supported Python API, CLI and
+VCF interfaces, and artifact compatibility. The [v1 migration and release
+notes](docs/releases/v1.0.0.md) explain changes from earlier releases, PON rebuild
+requirements, and release validation. PON schema 2 / evidence policy 8 artifacts
+from v0.8.2 remain compatible; older schema or evidence-policy versions require
+rebuilding.
+
 ## Installation
 
 The recommended way to install **skua** is via [conda](https://docs.conda.io/), using the `MOMA-AUH` channel:
@@ -468,7 +483,7 @@ and fallback, and all five assessment thresholds. For example, a case-only run
 with default quality thresholds writes:
 
 ```text
-##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.8.2",Mode="case_only",EvidencePolicyVersion="8",IndelMatching="exact_anchor",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
+##SKUA_RUN=<SchemaVersion="1",SkuaVersion="1.0.0",Mode="case_only",EvidencePolicyVersion="8",IndelMatching="exact_anchor",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
 
 `SkuaVersion` reflects the installed version. Cached annotation records the
@@ -496,8 +511,11 @@ an input VCF.
 
 ## Python API
 
-The supported library API is available directly from `skua`. It accepts
-substitutions, MNVs, and left-anchored simple insertions and deletions.
+The supported library API is the top-level exports in `skua.__all__`; see the
+[API contract](docs/v1-contract.md#python-api) for the complete list and
+validation boundaries. It accepts substitutions, MNVs, and left-anchored simple
+insertions and deletions. Submodule helpers, including the row formatters
+mentioned below, are not covered by the v1 compatibility promise.
 
 `annotate_vcf_to_json()` and `annotate_vcf_to_json_with_normals()` return a
 JSON object with `run_summary` and `records` keys. The summary has

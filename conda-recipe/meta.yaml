@@ -1,5 +1,5 @@
 {% set name = "skua" %}
-{% set version = "0.8.2" %}
+{% set version = "1.0.0" %}
 
 package:
   name: {{ name|lower }}
@@ -33,6 +33,6 @@ test:
 
 about:
   home: https://github.com/MOMA-AUH/skua
-  summary: Predatory and kleptoparasitic variant caller for detecting subclonal mutations in deep sequencing data
+  summary: Shearwater-based evidence annotation for supplied small variants in targeted sequencing data
   license: MIT
   license_file: LICENSE
