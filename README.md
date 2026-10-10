@@ -187,7 +187,7 @@ Output FORMAT fields:
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1); missing when evidence is insufficient
 - `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models; missing when evidence is insufficient
 - `SKUA_ASSESSMENT_STATUS`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
-- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; omitted from a record's FORMAT when there are no reasons
+- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; present with value `.` when there are no reasons
 
 Output INFO fields:
 - `SKUA_ARTIFACT_PRIOR`: Effective prior probability that the ALT allele is an artifact before Skua evidence
@@ -245,9 +245,11 @@ order: `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 can make scores missing; counts are unchanged. Scores for records that remain
 `ASSESSED` are unchanged.
 
-The `SKUA_ASSESSMENT_REASONS` definition remains in the VCF header, but the
-field appears in a record's FORMAT only when the selected case has unmet
-requirements. When present on a multisample record, other samples have `.`.
+`SKUA_ASSESSMENT_REASONS` appears in the FORMAT of every supported record
+annotated with live normals or a cached PON. Its value is `.` when the selected
+case is `ASSESSED`, or the list of unmet requirements otherwise. Other samples
+have `.`. Unsupported records and case-only evidence annotation receive no
+assessment fields.
 Consumers should handle the field being absent for `ASSESSED` records.
 
 For example, a downstream Python filter for a selected VCF sample can require

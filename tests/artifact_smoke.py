@@ -92,6 +92,7 @@ def exercise(root: Path, reference: Path, targets: Path, suffix: str) -> list:
         assert sample["SKUA_NON_ALT_FWD"] == sample["SKUA_NON_ALT_REV"] == 1
         assert sample["SKUA_USABLE"] == 4
         assert sample["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
+        assert sample["SKUA_ASSESSMENT_REASONS"] == (".",)
         assert info["SKUA_PON_USABLE"] == 10
         assert info["SKUA_PON_SAMPLE_COUNT"] == 1
         assert sample["SKUA_ARTIFACT_POSTERIOR"] is not None

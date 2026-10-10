@@ -226,7 +226,7 @@ fields require live normals or a cached PON. Counts are nonnegative integers.
 | FORMAT `SKUA_USABLE`, `SKUA_UNUSABLE` | 1 | Integer | Case usable/unusable evidence; usable equals the four strand counts' sum. |
 | FORMAT `SKUA_LOG_BAYES_FACTOR`, `SKUA_ARTIFACT_POSTERIOR` | 1 | Float | Artifact-versus-variant log evidence and artifact probability; missing (`.`) when evidence is insufficient. |
 | FORMAT `SKUA_ASSESSMENT_STATUS` | 1 | String | `ASSESSED` or `INSUFFICIENT_EVIDENCE`. |
-| FORMAT `SKUA_ASSESSMENT_REASONS` | . | String | All unmet requirements; absent from a record's FORMAT when assessed. |
+| FORMAT `SKUA_ASSESSMENT_REASONS` | . | String | All unmet requirements; present on every model-annotated record, with value `.` when assessed. |
 | INFO `SKUA_STATUS` | 1 | String | Annotation outcome for every record. |
 | INFO `SKUA_ARTIFACT_PRIOR` | A | Float | Effective allele prior, strictly between 0 and 1. |
 | INFO `SKUA_PON_SAMPLE_COUNT` | 1 | Integer | Number of retained normals. |
@@ -242,6 +242,11 @@ not insufficient evidence.
 
 Assessment reasons are `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 `NORMAL_SAMPLE_COUNT_UNAVAILABLE`, `CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`.
+The reasons FORMAT field is present on every supported record annotated with
+normals: `.` for an assessed case or an unselected sample, otherwise the list
+of unmet requirements. Python/JSON reasons remain an empty tuple/list when
+assessed. Unsupported records and case-only outputs have no assessment fields.
+
 `ANNOTATED` does not imply `ASSESSED`. For every `INSUFFICIENT_EVIDENCE` result,
 both model scores are missing (`.`) in VCF, `None` in Python, and `null` in JSON.
 Counts, the input prior, status and reasons remain available. This includes

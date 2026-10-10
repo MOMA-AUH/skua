@@ -68,7 +68,7 @@ MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
 
 ASSESSMENT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, int | str, str], ...] = (
     ("SKUA_ASSESSMENT_STATUS", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are missing when evidence is insufficient"),
-    ("SKUA_ASSESSMENT_REASONS", ".", "Unmet assessment requirements; missing when ASSESSED"),
+    ("SKUA_ASSESSMENT_REASONS", ".", "Unmet assessment requirements; value is . when ASSESSED"),
 )
 
 PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
@@ -897,8 +897,7 @@ def _annotate_pon_record(
     # pysam otherwise fills newly added strings with non-text missing sentinels.
     for record_sample in record.samples.values():
         record_sample["SKUA_ASSESSMENT_STATUS"] = "."
-        if stats.assessment_reasons:
-            record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
+        record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
     sample = record.samples[sample_name]
     sample["SKUA_ASSESSMENT_STATUS"] = stats.assessment_status.value
     if stats.assessment_reasons:
