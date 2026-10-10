@@ -468,7 +468,7 @@ and fallback, and all five assessment thresholds. For example, a case-only run
 with default quality thresholds writes:
 
 ```text
-##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.8.1",Mode="case_only",EvidencePolicyVersion="8",IndelMatching="exact_anchor",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
+##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.8.2",Mode="case_only",EvidencePolicyVersion="8",IndelMatching="exact_anchor",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
 
 `SkuaVersion` reflects the installed version. Cached annotation records the
