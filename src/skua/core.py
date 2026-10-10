@@ -2,6 +2,7 @@
 
 import gzip
 import json
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from enum import Enum
 import math
@@ -32,6 +33,7 @@ from .pon import (
     EVIDENCE_POLICY_VERSION,
     PON_EVIDENCE_FORMAT_FIELDS,
     PON_HEADER_KEY,
+    PonArtifactMetadata,
     read_pon_evidence,
     read_pon_metadata,
     write_pon_artifact,
@@ -895,10 +897,12 @@ def _annotate_pon_record(
     # pysam otherwise fills newly added strings with non-text missing sentinels.
     for record_sample in record.samples.values():
         record_sample["SKUA_ASSESSMENT_STATUS"] = "."
-        record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
+        if stats.assessment_reasons:
+            record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
     sample = record.samples[sample_name]
     sample["SKUA_ASSESSMENT_STATUS"] = stats.assessment_status.value
-    sample["SKUA_ASSESSMENT_REASONS"] = stats.assessment_reasons or (".",)
+    if stats.assessment_reasons:
+        sample["SKUA_ASSESSMENT_REASONS"] = stats.assessment_reasons
     record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
     record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
     record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
@@ -944,6 +948,7 @@ def _run_summary(
     model: dict[str, Any] | None = None,
     case_read_groups: str = "assigned_to_sample",
     normal_read_groups: str = "assigned_to_sample",
+    indel_matching: str = "exact_anchor",
 ) -> dict[str, Any]:
     """Record effective settings without input identities or file reads."""
     return {
@@ -951,6 +956,7 @@ def _run_summary(
         "evidence": evidence_summary(
             EVIDENCE_POLICY_VERSION, min_baseq, min_mapq,
             normal_read_groups=normal_read_groups,
+            indel_matching=indel_matching,
         ),
         "case_read_groups": case_read_groups,
         "model": model,
@@ -1158,12 +1164,13 @@ def annotate_vcf(
     def build_supported_annotations(
         case_selection: CaseSampleSelection,
     ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
-        return annotate_variants_from_vcf(
+        return annotate_variants(
             alignment_file,
-            vcf_path,
+            _supported_variants_from_vcf(vcf_path),
             min_baseq=min_baseq,
             min_mapq=min_mapq,
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
+            reference_path=reference_path,
         )
 
     _annotate_vcf_stream(
@@ -1179,6 +1186,7 @@ def annotate_vcf(
         reference_identity=reference_identity,
         run_summary=_run_summary(
             "case_only", min_baseq=min_baseq, min_mapq=min_mapq,
+            indel_matching="reference" if reference_path is not None else "exact_anchor",
             normal_read_groups="not_applicable",
         ),
     )
@@ -1254,13 +1262,14 @@ def annotate_vcf_with_normals(
             alignment_file, normal_alignments=normal_alignments,
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
         )
-        return annotate_variants_from_vcf_with_normals(
+        return annotate_variants_with_normals(
             alignment_file,
-            vcf_path,
+            _supported_variants_from_vcf(vcf_path),
             normal_alignments=normal_alignments,
             min_baseq=min_baseq,
             min_mapq=min_mapq,
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
+            reference_path=reference_path,
         )
 
     _annotate_vcf_stream(
@@ -1276,6 +1285,7 @@ def annotate_vcf_with_normals(
         reference_identity=reference_identity,
         run_summary=_run_summary(
             "live_normals", min_baseq=min_baseq, min_mapq=min_mapq,
+            indel_matching="reference" if reference_path is not None else "exact_anchor",
             normal_read_groups="per_normal_selection" if None in normal_read_groups else "assigned_to_sample",
             model=_model_summary(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
         ),
@@ -1289,18 +1299,21 @@ def annotate_variant(
     min_baseq: int = 20,
     min_mapq: int = 20,
     allowed_read_group_ids: frozenset[str] | None = None,
+    reference_path: str | Path | None = None,
 ) -> AggregatedEvidence:
     """Collect strand-aware evidence for one variant from one alignment."""
-    return collect_evidence_from_alignment(
-        alignment_file,
-        contig=variant.contig,
-        ref_pos0=variant.ref_pos0,
-        ref_base=variant.ref,
-        alt_base=variant.alt,
-        min_baseq=min_baseq,
-        min_mapq=min_mapq,
-        allowed_read_group_ids=allowed_read_group_ids,
-    )
+    with pysam.FastaFile(str(reference_path)) if reference_path is not None else nullcontext() as reference:
+        return collect_evidence_from_alignment(
+            alignment_file,
+            contig=variant.contig,
+            ref_pos0=variant.ref_pos0,
+            ref_base=variant.ref,
+            alt_base=variant.alt,
+            min_baseq=min_baseq,
+            min_mapq=min_mapq,
+            allowed_read_group_ids=allowed_read_group_ids,
+            reference_file=reference,
+        )
 
 
 def _variant_batches(
@@ -1396,16 +1409,21 @@ def _collect_variant_batch(
     min_baseq: int,
     min_mapq: int,
     allowed_read_group_ids: frozenset[str] | None,
+    reference_file: Any = None,
 ) -> tuple[AggregatedEvidence, ...]:
     """Collect one already-planned batch, retaining the site path for singletons."""
     if len(variant_batch) == 1:
         return (
-            annotate_variant(
+            collect_evidence_from_alignment(
                 alignment_file,
-                variant_batch[0],
+                contig=variant_batch[0].contig,
+                ref_pos0=variant_batch[0].ref_pos0,
+                ref_base=variant_batch[0].ref,
+                alt_base=variant_batch[0].alt,
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
                 allowed_read_group_ids=allowed_read_group_ids,
+                reference_file=reference_file,
             ),
         )
     return collect_evidence_from_alignment_batch(
@@ -1414,6 +1432,7 @@ def _collect_variant_batch(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_file=reference_file,
     )
 
 
@@ -1424,24 +1443,28 @@ def annotate_variants(
     min_baseq: int = 20,
     min_mapq: int = 20,
     allowed_read_group_ids: frozenset[str] | None = None,
+    reference_path: str | Path | None = None,
 ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
     """Yield evidence in input order, batching nearby coordinate-sorted variants."""
-    for variant_batch in _variant_batches(variants):
-        evidences = _collect_variant_batch(
-            alignment_file,
-            variant_batch,
-            min_baseq=min_baseq,
-            min_mapq=min_mapq,
-            allowed_read_group_ids=allowed_read_group_ids,
-        )
+    with pysam.FastaFile(str(reference_path)) if reference_path is not None else nullcontext() as reference:
+        for variant_batch in _variant_batches(variants):
+            evidences = _collect_variant_batch(
+                alignment_file,
+                variant_batch,
+                min_baseq=min_baseq,
+                min_mapq=min_mapq,
+                allowed_read_group_ids=allowed_read_group_ids,
+                reference_file=reference,
+            )
 
-        yield from zip(variant_batch, evidences, strict=True)
+            yield from zip(variant_batch, evidences, strict=True)
 
 
 def annotate_variant_with_normals(
     alignment_file: Any,
     variant: Variant,
     *,
+    reference_path: str | Path | None = None,
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
@@ -1466,6 +1489,7 @@ def annotate_variant_with_normals(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_path=reference_path,
     )
 
     normal_evidences: list[AggregatedEvidence] = []
@@ -1486,6 +1510,7 @@ def annotate_variant_with_normals(
             min_baseq=min_baseq,
             min_mapq=min_mapq,
             allowed_read_group_ids=read_group_ids,
+            reference_path=reference_path,
         )
         normal_evidences.append(normal_evidence)
 
@@ -1514,13 +1539,14 @@ def annotate_variants_from_vcf(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
+    reference_path: str | Path | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
     allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, AggregatedEvidence]]:
     """Yield per-variant evidence for variant records from a VCF file."""
     _validate_vcf_against_inputs(
-        vcf_path, alignment_files=[("Case alignment", alignment_file)], reference_path=None,
+        vcf_path, alignment_files=[("Case alignment", alignment_file)], reference_path=reference_path,
     )
     yield from annotate_variants(
         alignment_file,
@@ -1528,6 +1554,7 @@ def annotate_variants_from_vcf(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_path=reference_path,
     )
 
 
@@ -1535,27 +1562,30 @@ def _collect_pon_evidence(
     normal_alignments: list[Any],
     variants: Iterable[Variant],
     *,
+    reference_path: str | Path | None = None,
     min_baseq: int,
     min_mapq: int,
     normal_read_groups: list[frozenset[str] | None],
 ) -> Iterator[tuple[Variant, tuple[AggregatedEvidence, ...]]]:
     """Yield per-normal evidence for each target while sharing nearby fetches."""
-    for variant_batch in _variant_batches(variants):
-        normal_evidences_by_alignment = [
-            _collect_variant_batch(
-                normal_alignment,
-                variant_batch,
-                min_baseq=min_baseq,
-                min_mapq=min_mapq,
-                allowed_read_group_ids=read_group_ids,
-            )
-            for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
-        ]
-        for variant_index, variant in enumerate(variant_batch):
-            yield variant, tuple(
-                evidences[variant_index]
-                for evidences in normal_evidences_by_alignment
-            )
+    with pysam.FastaFile(str(reference_path)) if reference_path is not None else nullcontext() as reference:
+        for variant_batch in _variant_batches(variants):
+            normal_evidences_by_alignment = [
+                _collect_variant_batch(
+                    normal_alignment,
+                    variant_batch,
+                    min_baseq=min_baseq,
+                    min_mapq=min_mapq,
+                    allowed_read_group_ids=read_group_ids,
+                    reference_file=reference,
+                )
+                for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
+            ]
+            for variant_index, variant in enumerate(variant_batch):
+                yield variant, tuple(
+                    evidences[variant_index]
+                    for evidences in normal_evidences_by_alignment
+                )
 
 
 def build_pon(
@@ -1618,37 +1648,68 @@ def build_pon(
             min_baseq=min_baseq,
             min_mapq=min_mapq,
             normal_read_groups=normal_read_groups,
+            reference_path=reference_path,
         ),
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         force=force,
         reference_identity=reference_identity,
+        indel_matching="reference" if reference_path is not None else "exact_anchor",
     )
+
+
+def _pon_evidence_reference_path(
+    metadata: PonArtifactMetadata, reference_path: str | Path | None,
+) -> str | Path | None:
+    """Keep fresh case evidence on the cached normal evidence's matching policy."""
+    if metadata.indel_matching == "exact_anchor":
+        return None
+    if reference_path is None:
+        raise ValueError("This PON requires a reference FASTA for equivalent-indel matching")
+    return reference_path
 
 
 def annotate_variants_from_pon(
     alignment_file: Any,
     pon_path: str | Path,
     *,
+    reference_path: str | Path | None = None,
     allowed_read_group_ids: frozenset[str] | None = None,
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield case evidence paired with cached per-normal evidence."""
     metadata = read_pon_metadata(pon_path)
+    evidence_reference = _pon_evidence_reference_path(metadata, reference_path)
     _validate_case_panel_membership(
         alignment_file, normal_sample_names=metadata.sample_names,
         allowed_read_group_ids=allowed_read_group_ids,
     )
     _validate_vcf_against_inputs(
         pon_path, alignment_files=[("Case alignment", alignment_file)],
-        reference_path=None, strict=True, pon_reference=metadata.reference_identity,
+        reference_path=reference_path, strict=True, pon_reference=metadata.reference_identity,
     )
 
-    case_results = annotate_variants_from_vcf(
+    yield from _annotate_pon_targets(
+        alignment_file, pon_path, metadata=metadata,
+        reference_path=evidence_reference, allowed_read_group_ids=allowed_read_group_ids,
+    )
+
+
+def _annotate_pon_targets(
+    alignment_file: Any,
+    pon_path: str | Path,
+    *,
+    metadata: PonArtifactMetadata,
+    reference_path: str | Path | None,
+    allowed_read_group_ids: frozenset[str] | None,
+) -> Iterator[tuple[Variant, PonAnnotation]]:
+    """Collect case evidence for PON targets after the caller's preflight."""
+    case_results = annotate_variants(
         alignment_file,
-        pon_path,
+        _supported_variants_from_vcf(pon_path),
         min_baseq=metadata.min_baseq,
         min_mapq=metadata.min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_path=reference_path,
     )
     for (case_variant, case_evidence), (pon_variant, normal_evidences) in zip(
         case_results,
@@ -1698,18 +1759,20 @@ def _annotate_variants_from_vcf_with_pon(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
+    reference_path: str | Path | None = None,
     pon_evidence_by_variant: dict[Variant, tuple[AggregatedEvidence, ...]],
     min_baseq: int,
     min_mapq: int,
     allowed_read_group_ids: frozenset[str] | None,
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Pair case evidence from a VCF with preloaded evidence from a PON."""
-    for variant, case_evidence in annotate_variants_from_vcf(
+    for variant, case_evidence in annotate_variants(
         alignment_file,
-        vcf_path,
+        _supported_variants_from_vcf(vcf_path),
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_path=reference_path,
     ):
         normal_evidences = pon_evidence_by_variant[variant]
         yield variant, PonAnnotation(
@@ -1748,6 +1811,7 @@ def annotate_vcf_with_pon(
         prior_artifact_probability=prior_artifact_probability,
     )
     metadata = read_pon_metadata(pon_path)
+    evidence_reference = _pon_evidence_reference_path(metadata, reference_path)
     source_vcf_path = pon_path if vcf_path is None else vcf_path
     _validate_distinct_vcf_paths(source_vcf_path, output_path)
     if vcf_path is not None:
@@ -1810,11 +1874,14 @@ def annotate_vcf_with_pon(
                 min_baseq=metadata.min_baseq,
                 min_mapq=metadata.min_mapq,
                 allowed_read_group_ids=case_selection.allowed_read_group_ids,
+                reference_path=evidence_reference,
             )
-        return annotate_variants_from_pon(
+        return _annotate_pon_targets(
             alignment_file,
             pon_path,
+            metadata=metadata,
             allowed_read_group_ids=case_selection.allowed_read_group_ids,
+            reference_path=evidence_reference,
         )
 
     _annotate_vcf_stream(
@@ -1830,6 +1897,7 @@ def annotate_vcf_with_pon(
         reference_identity=reference_identity,
         run_summary=_run_summary(
             "cached_pon", min_baseq=metadata.min_baseq, min_mapq=metadata.min_mapq,
+            indel_matching=metadata.indel_matching,
             model=_model_summary(truncate, pseudocount, prior_artifact_probability, assessment_thresholds),
         ),
     )
@@ -1968,6 +2036,7 @@ def annotate_variants_with_normals(
     alignment_file: Any,
     variants: Iterable[Variant],
     *,
+    reference_path: str | Path | None = None,
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
@@ -1982,49 +2051,53 @@ def annotate_variants_with_normals(
         allowed_read_group_ids=allowed_read_group_ids,
     )
 
-    for variant_batch in _variant_batches(variants):
-        check_reference_compatibility(
-            (variant.contig for variant in variant_batch),
-            alignment_files=[("Case alignment", alignment_file)]
-            + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
-        )
-        case_evidences = _collect_variant_batch(
-            alignment_file,
-            variant_batch,
-            min_baseq=min_baseq,
-            min_mapq=min_mapq,
-            allowed_read_group_ids=allowed_read_group_ids,
-        )
-        normal_evidences_by_alignment = [
-            _collect_variant_batch(
-                normal_alignment,
+    with pysam.FastaFile(str(reference_path)) if reference_path is not None else nullcontext() as reference:
+        for variant_batch in _variant_batches(variants):
+            check_reference_compatibility(
+                (variant.contig for variant in variant_batch),
+                alignment_files=[("Case alignment", alignment_file)]
+                + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments, 1)],
+            )
+            case_evidences = _collect_variant_batch(
+                alignment_file,
                 variant_batch,
                 min_baseq=min_baseq,
                 min_mapq=min_mapq,
-                allowed_read_group_ids=read_group_ids,
+                allowed_read_group_ids=allowed_read_group_ids,
+                reference_file=reference,
             )
-            for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
-        ]
+            normal_evidences_by_alignment = [
+                _collect_variant_batch(
+                    normal_alignment,
+                    variant_batch,
+                    min_baseq=min_baseq,
+                    min_mapq=min_mapq,
+                    allowed_read_group_ids=read_group_ids,
+                    reference_file=reference,
+                )
+                for normal_alignment, read_group_ids in zip(normal_alignments, normal_read_groups, strict=True)
+            ]
 
-        for variant_index, variant in enumerate(variant_batch):
-            normal_evidences = tuple(
-                evidences[variant_index]
-                for evidences in normal_evidences_by_alignment
-            )
-            yield (
-                variant,
-                PonAnnotation(
-                    case_evidence=case_evidences[variant_index],
-                    normal_evidences=normal_evidences,
-                    normal_aggregate_evidence=aggregate_evidence(list(normal_evidences)),
-                ),
-            )
+            for variant_index, variant in enumerate(variant_batch):
+                normal_evidences = tuple(
+                    evidences[variant_index]
+                    for evidences in normal_evidences_by_alignment
+                )
+                yield (
+                    variant,
+                    PonAnnotation(
+                        case_evidence=case_evidences[variant_index],
+                        normal_evidences=normal_evidences,
+                        normal_aggregate_evidence=aggregate_evidence(list(normal_evidences)),
+                    ),
+                )
 
 
 def annotate_variants_from_vcf_with_normals(
     alignment_file: Any,
     vcf_path: str | Path,
     *,
+    reference_path: str | Path | None = None,
     normal_alignments: list[Any] | None = None,
     min_baseq: int = 20,
     min_mapq: int = 20,
@@ -2032,7 +2105,7 @@ def annotate_variants_from_vcf_with_normals(
 ) -> Iterator[tuple[Variant, PonAnnotation]]:
     """Yield per-variant case+normal evidence for variant records from a VCF file."""
     _validate_vcf_against_inputs(
-        vcf_path, reference_path=None, alignment_files=[("Case alignment", alignment_file)]
+        vcf_path, reference_path=reference_path, alignment_files=[("Case alignment", alignment_file)]
         + [(f"Normal alignment {i}", normal) for i, normal in enumerate(normal_alignments or [], 1)],
     )
     yield from annotate_variants_with_normals(
@@ -2042,6 +2115,7 @@ def annotate_variants_from_vcf_with_normals(
         min_baseq=min_baseq,
         min_mapq=min_mapq,
         allowed_read_group_ids=allowed_read_group_ids,
+        reference_path=reference_path,
     )
 
 

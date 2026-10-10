@@ -198,19 +198,20 @@ def test_duplicates_are_rejected_even_without_sample_metadata(tmp_path, duplicat
         annotate_variant_with_normals(normal, variant, normal_alignments=[repeated])
 
 
-def test_schema_two_panel_with_old_normal_policy_requires_rebuild(tmp_path):
+@pytest.mark.parametrize("old_policy", ["4", "7"])
+def test_schema_two_panel_with_old_normal_policy_requires_rebuild(tmp_path, old_policy):
     vcf = targets(tmp_path / "targets.vcf")
     panel = tmp_path / "panel.bcf"
     incompatible = tmp_path / "old-policy.bcf"
     with alignment(tmp_path / "normal.bam", "NORMAL") as normal:
         build_pon(vcf, normal_alignments=[normal], output_path=panel)
     serialized = bcftools.view("-Ov", str(panel))
-    old = serialized.replace('EvidencePolicyVersion="7"', 'EvidencePolicyVersion="4"')
+    old = serialized.replace('EvidencePolicyVersion="8"', f'EvidencePolicyVersion="{old_policy}"')
     assert old != serialized
     (tmp_path / "old.vcf").write_text(old)
     bcftools.view("-Ob", "-o", str(incompatible), str(tmp_path / "old.vcf"), catch_stdout=False)
     bcftools.index(str(incompatible))
-    assert inspect_pon(incompatible).evidence_policy_version == "4"
+    assert inspect_pon(incompatible).evidence_policy_version == old_policy
     assert not validate_pon(incompatible).valid
     with pytest.raises(ValueError, match="evidence policy.*rebuild"):
         read_pon_metadata(incompatible)

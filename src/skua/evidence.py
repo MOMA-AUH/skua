@@ -130,6 +130,30 @@ _CIGAR_SOFT_CLIP = 4
 _CIGAR_HARD_CLIP = 5
 _CIGAR_PADDING = 6
 
+# Search displacement, not repeat length or reference-gap length.
+_MAX_INDEL_SHIFT = 100
+
+
+@dataclass(frozen=True)
+class _IndelReference:
+    start: int
+    sequence: str
+
+    def fetch(self, start: int, end: int) -> str:
+        return self.sequence[start - self.start:end - self.start]
+
+
+def _indel_reference(reference_file: Any, variant: Variant) -> _IndelReference | None:
+    """Load a bounded comparison window once per indel, never once per read."""
+    if reference_file is None or len(variant.ref) == len(variant.alt):
+        return None
+    start = max(0, variant.ref_pos0 - _MAX_INDEL_SHIFT)
+    end = variant.ref_pos0 + len(variant.ref) + _MAX_INDEL_SHIFT + 1
+    context = _IndelReference(start, reference_file.fetch(variant.contig, start, end).upper())
+    if context.fetch(variant.ref_pos0, variant.ref_pos0 + len(variant.ref)) != variant.ref:
+        raise ValueError("Variant REF does not match the supplied reference")
+    return context
+
 
 @dataclass(frozen=True)
 class _AlignmentPositions:
@@ -362,6 +386,7 @@ def _query_positions_for_insertion(
     alignment_positions: _AlignmentPositions,
     *,
     ref_pos0: int,
+    require_right_flank: bool = True,
 ) -> list[int] | None:
     """Return a flanked CIGAR insertion after the anchor, or None if unobservable."""
     anchor_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
@@ -389,6 +414,8 @@ def _query_positions_for_insertion(
         insertion_query_positions.append(query_pos)
         pair_index += 1
 
+    if not require_right_flank:
+        return insertion_query_positions
     if pair_index >= len(alignment_positions.pairs):
         return None
 
@@ -406,6 +433,7 @@ def _deleted_reference_span(
     alignment_positions: _AlignmentPositions,
     *,
     ref_pos0: int,
+    require_right_flank: bool = True,
 ) -> range | None:
     """Return a compact flanked deletion range, or None if absent/unsafe."""
     anchor_pair_index = alignment_positions.ref_to_pair_index.get(ref_pos0)
@@ -434,7 +462,11 @@ def _deleted_reference_span(
         deleted_end = alignment_positions.reference_gap_ends[pair_index]
         pair_index += 1
 
-    if deleted_end == deleted_start or pair_index >= len(alignment_positions.pairs):
+    if deleted_end == deleted_start:
+        return None
+    if not require_right_flank:
+        return range(deleted_start, deleted_end)
+    if pair_index >= len(alignment_positions.pairs):
         return None
 
     flank_query_pos, flank_ref_pos, flank_op = alignment_positions.pairs[pair_index]
@@ -447,6 +479,77 @@ def _deleted_reference_span(
     return range(deleted_start, deleted_end)
 
 
+def _shifted_indel_call(
+    read: Any,
+    positions: _AlignmentPositions,
+    reference: _IndelReference,
+    *,
+    ref_pos0: int,
+    ref_base: str,
+    alt_base: str,
+    min_baseq: int,
+) -> ReadAlleleCall | None:
+    """Compare one explicit shifted indel over clean, quality-checked flanks."""
+    deleted_length = len(ref_base) - 1
+    for anchor in positions.ref_to_pair_index:
+        if anchor == ref_pos0 or abs(anchor - ref_pos0) > _MAX_INDEL_SHIFT:
+            continue
+        inserted: list[int] = []
+        if deleted_length:
+            deleted = _deleted_reference_span(positions, ref_pos0=anchor, require_right_flank=False)
+            if deleted is None or len(deleted) != deleted_length:
+                continue
+        else:
+            inserted_positions = _query_positions_for_insertion(
+                positions, ref_pos0=anchor, require_right_flank=False,
+            )
+            if not inserted_positions or len(inserted_positions) != len(alt_base) - 1:
+                continue
+            inserted = inserted_positions
+        start = min(anchor, ref_pos0)
+        end = max(anchor, ref_pos0) + deleted_length + 2
+        bases = reference.fetch(start, end)
+        if len(bases) != end - start or set(bases) - set("ACGT"):
+            continue
+        target_offset, candidate_offset = ref_pos0 - start + 1, anchor - start + 1
+        expected = bases[:target_offset] + alt_base[1:] + bases[target_offset + deleted_length:]
+        # Establish that the target can be represented at this anchor using
+        # reference alone. Only quality-checked read bases may decide support.
+        insertion = expected[candidate_offset:candidate_offset + len(inserted)]
+        candidate = bases[:candidate_offset] + insertion + bases[candidate_offset + deleted_length:]
+        if candidate != expected:
+            continue
+
+        first = positions.ref_to_pair_index.get(start)
+        last = positions.ref_to_pair_index.get(end - 1)
+        reason: UnusableReason | None = UnusableReason.NO_BASE_AT_SITE
+        if first is not None and last is not None:
+            span = positions.pairs[first:last + 1]
+            query_positions = [q for q, _r, _op in span if q is not None]
+            if (
+                len(query_positions) == len(expected)
+                and all(
+                    op in _CIGAR_ALIGNED_OPS
+                    or (op == _CIGAR_INSERTION and q in inserted)
+                    or (op == _CIGAR_DELETION and r is not None
+                        and anchor < r <= anchor + deleted_length)
+                    for q, r, op in span
+                )
+                and query_positions == list(range(query_positions[0], query_positions[-1] + 1))
+            ):
+                observed, reason, _base = _query_position_bases_and_qualities(
+                    read, query_positions, min_baseq=min_baseq,
+                )
+                if reason is None:
+                    return ReadAlleleCall(
+                        AlleleSupport.ALT if observed == expected else AlleleSupport.NON_ALT,
+                        read.is_reverse, observed_base=observed,
+                        base_quality=min(read.query_qualities[q] for q in query_positions),
+                    )
+        return ReadAlleleCall(AlleleSupport.UNUSABLE, read.is_reverse, reason=reason)
+    return None
+
+
 def classify_variant_read(
     read: Any,
     *,
@@ -457,6 +560,7 @@ def classify_variant_read(
     min_mapq: int = 20,
     ref_to_query: dict[int, int | None] | None = None,
     alignment_positions: _AlignmentPositions | None = None,
+    indel_reference: _IndelReference | None = None,
 ) -> ReadAlleleCall:
     """Classify one read as ALT, NON_ALT, or UNUSABLE for a variant.
 
@@ -481,6 +585,14 @@ def classify_variant_read(
         alignment_positions = _alignment_positions(read)
         ref_to_query = alignment_positions.ref_to_query
 
+    if ref_len != alt_len and indel_reference is not None:
+        assert alignment_positions is not None
+        shifted = _shifted_indel_call(
+            read, alignment_positions, indel_reference,
+            ref_pos0=ref_pos0, ref_base=ref_base, alt_base=alt_base, min_baseq=min_baseq,
+        )
+        if shifted is not None:
+            return shifted
     # Simple substitutions, including MNVs.
     if ref_len == alt_len:
         query_positions = _query_positions_for_ref_span(
@@ -728,6 +840,7 @@ def collect_evidence_from_alignment(
     min_baseq: int = 20,
     min_mapq: int = 20,
     allowed_read_group_ids: frozenset[str] | None = None,
+    reference_file: Any = None,
 ) -> AggregatedEvidence:
     """Fetch overlapping reads for one variant and collect strand-aware evidence.
 
@@ -736,6 +849,7 @@ def collect_evidence_from_alignment(
     from a multi-sample alignment.
     """
     ref_base, alt_base = _normalize_simple_alleles(ref_base, alt_base)
+    reference = _indel_reference(reference_file, Variant(contig, ref_pos0, ref_base, alt_base))
     reads = (
         read
         for read in alignment_file.fetch(contig, ref_pos0, ref_pos0 + 1)
@@ -757,6 +871,7 @@ def collect_evidence_from_alignment(
                     alt_base=alt_base,
                     min_baseq=min_baseq,
                     min_mapq=min_mapq,
+                    indel_reference=reference,
                 ),
             )
             for read in fragment_reads
@@ -790,6 +905,7 @@ def collect_evidence_from_alignment_batch(
     min_baseq: int = 20,
     min_mapq: int = 20,
     allowed_read_group_ids: frozenset[str] | None = None,
+    reference_file: Any = None,
 ) -> tuple[AggregatedEvidence, ...]:
     """Collect evidence for same-contig variants with one alignment fetch.
 
@@ -803,6 +919,8 @@ def collect_evidence_from_alignment_batch(
     contig = variants[0].contig
     if any(variant.contig != contig for variant in variants):
         raise ValueError("A variant batch must contain exactly one contig")
+
+    references = [_indel_reference(reference_file, variant) for variant in variants]
 
     sorted_variants = sorted(
         enumerate(variants),
@@ -862,6 +980,7 @@ def collect_evidence_from_alignment_batch(
                 min_mapq=min_mapq,
                 ref_to_query=ref_to_query,
                 alignment_positions=alignment_positions,
+                indel_reference=references[original_index],
             )
             fragments_by_variant[original_index].setdefault(fragment_key, []).append(
                 (read, read_call)

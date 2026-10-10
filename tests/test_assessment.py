@@ -133,6 +133,47 @@ def _write_inputs(tmp_path, case, normals):
     return targets, case_path, normal_paths, normal_list
 
 
+@pytest.mark.parametrize("cached", [False, True], ids=["direct", "cached"])
+@pytest.mark.parametrize("suffix", [".vcf", ".vcf.gz"])
+def test_reasons_format_is_present_only_on_records_with_reasons(tmp_path, cached, suffix):
+    targets, case_path, normal_paths, _ = _write_inputs(
+        tmp_path, (1, 1, 1, 1), [(0, 0, 2, 2)],
+    )
+    targets.write_text(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tOTHER\n"
+        "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\t0/0\n"
+        "chr1\t206\t.\tA\tT\t.\tPASS\t.\tGT\t0/1\t0/0\n",
+    )
+    output = tmp_path / f"calls{suffix}"
+    with (
+        pysam.AlignmentFile(str(case_path)) as case,
+        pysam.AlignmentFile(str(normal_paths[0])) as normal,
+    ):
+        if cached:
+            panel = tmp_path / "panel.bcf"
+            skua.build_pon(targets, normal_alignments=[normal], output_path=panel)
+            skua.annotate_vcf_with_pon(case, panel, vcf_path=targets, output_path=output)
+        else:
+            skua.annotate_vcf_with_normals(
+                case, targets, normal_alignments=[normal], output_path=output,
+            )
+
+    with pysam.VariantFile(str(output)) as vcf:
+        assert "SKUA_ASSESSMENT_REASONS" in vcf.header.formats
+        assessed, insufficient = list(vcf)
+        assert assessed.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
+        assert "SKUA_ASSESSMENT_REASONS" not in assessed.format
+        assert insufficient.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
+        assert insufficient.samples["CASE"]["SKUA_ASSESSMENT_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
+        assert insufficient.samples["OTHER"]["SKUA_ASSESSMENT_REASONS"] == (".",)
+        for record in (assessed, insufficient):
+            assert record.samples["OTHER"]["SKUA_ASSESSMENT_STATUS"] == "."
+            assert record.samples["CASE"]["GT"] == (0, 1)
+            assert record.samples["OTHER"]["GT"] == (0, 0)
+
+
 @pytest.mark.parametrize("mode", ["direct", "pon", "vcf-pon"])
 @pytest.mark.parametrize(
     ("case", "normals", "thresholds", "reasons", "case_depth", "normal_depth", "normal_samples"),
@@ -190,7 +231,11 @@ def test_cli_assessment_preserves_counts_and_scores(
         sample = record.samples["CASE"]
         assert record.info["SKUA_STATUS"] == "ANNOTATED"
         assert sample["SKUA_ASSESSMENT_STATUS"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
-        assert sample["SKUA_ASSESSMENT_REASONS"] == (reasons or (".",))
+        assert "SKUA_ASSESSMENT_REASONS" in vcf.header.formats
+        if reasons:
+            assert sample["SKUA_ASSESSMENT_REASONS"] == reasons
+        else:
+            assert "SKUA_ASSESSMENT_REASONS" not in record.format
         assert sample["SKUA_USABLE"] == case_depth
         assert sample["SKUA_UNUSABLE"] == 1
         assert record.info["SKUA_PON_SAMPLE_COUNT"] == normal_samples
@@ -301,7 +346,7 @@ def test_force_replaces_assessment_and_leaves_unsupported_and_other_samples_unas
     with pysam.VariantFile(str(output)) as vcf:
         supported, unsupported = list(vcf)
         assert supported.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
-        assert supported.samples["CASE"]["SKUA_ASSESSMENT_REASONS"] == (".",)
+        assert "SKUA_ASSESSMENT_REASONS" not in supported.format
         assert supported.samples["OTHER"].get("SKUA_ASSESSMENT_STATUS") in (None, ".")
         assert unsupported.info["SKUA_STATUS"] == "UNSUPPORTED_SYMBOLIC_ALLELE"
         assert "SKUA_ASSESSMENT_STATUS" not in unsupported.format
