@@ -33,7 +33,7 @@ def test_valid_parameters_preserve_numerical_results(parameters, log_bayes_facto
 def test_statistical_parameter_boundaries_accept_equal_interior_limits() -> None:
     empty = _make_normal(0, 0, 0)
     stats = compute_stats(empty, empty, truncate=1, mu_min=0.5, mu_max=0.5)
-    assert stats.artifact_posterior == 0.5
+    assert stats.artifact_posterior is None
     assert estimate_rho([], rho_min=0.01, rho_max=0.01, truncate=1) == 0.01
 
 
@@ -139,8 +139,8 @@ def test_compute_stats_is_stable_for_zero_depth() -> None:
         "non_alt_forward": 0.0,
         "non_alt_reverse": 0.0,
     }
-    assert stats.log_bayes_factor_artifact_vs_variant == 0.0
-    assert stats.artifact_posterior == 0.5
+    assert stats.log_bayes_factor_artifact_vs_variant is None
+    assert stats.artifact_posterior is None
     assert stats.dispersion_rho == 1e-4
     assert stats.pseudocount == sys.float_info.epsilon
 

@@ -62,13 +62,13 @@ READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
 )
 
 MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
-    ("SKUA_LOG_BAYES_FACTOR", "Float", "Log Bayes factor artifact-vs-variant"),
-    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
+    ("SKUA_LBF", "Float", "Natural log Bayes factor artifact-vs-variant; positive favors artifact; missing when evidence is insufficient"),
+    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model; missing when evidence is insufficient"),
 )
 
 ASSESSMENT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, int | str, str], ...] = (
-    ("SKUA_ASSESSMENT_STATUS", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are retained"),
-    ("SKUA_ASSESSMENT_REASONS", ".", "Unmet assessment requirements; missing when ASSESSED"),
+    ("SKUA_ASSESSMENT", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are missing when evidence is insufficient"),
+    ("SKUA_REASONS", ".", "Unmet assessment requirements; value is . when ASSESSED"),
 )
 
 PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
@@ -79,7 +79,7 @@ PON_INFO_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("SKUA_PON_NON_ALT_REV", "Integer", "PON non-ALT reverse reads after truncation"),
     ("SKUA_PON_USABLE", "Integer", "PON usable reads after truncation"),
     ("SKUA_PON_UNUSABLE", "Integer", "PON unusable reads after truncation"),
-    ("SKUA_PON_DISPERSION_FACTOR", "Float", "Estimated dispersion factor"),
+    ("SKUA_PON_RHO", "Float", "Estimated beta-binomial dispersion parameter rho"),
 )
 
 ARTIFACT_PRIOR_INFO_FIELD_DEFINITION = (
@@ -850,13 +850,13 @@ def _annotate_pon_sample_format_fields(
     record: Any,
     *,
     sample_name: str,
-    artifact_posterior: float,
-    log_bayes_factor: float,
+    artifact_posterior: float | None,
+    log_bayes_factor: float | None,
 ) -> None:
     """Set PON model output FORMAT annotations for the selected case sample."""
     sample = record.samples[sample_name]
-    sample["SKUA_LOG_BAYES_FACTOR"] = float(log_bayes_factor)
-    sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
+    sample["SKUA_LBF"] = log_bayes_factor
+    sample["SKUA_ARTIFACT_POSTERIOR"] = artifact_posterior
 
 
 def _annotate_pon_record(
@@ -896,13 +896,12 @@ def _annotate_pon_record(
     # Explicitly initialize String FORMAT values for unselected samples:
     # pysam otherwise fills newly added strings with non-text missing sentinels.
     for record_sample in record.samples.values():
-        record_sample["SKUA_ASSESSMENT_STATUS"] = "."
-        if stats.assessment_reasons:
-            record_sample["SKUA_ASSESSMENT_REASONS"] = (".",)
+        record_sample["SKUA_ASSESSMENT"] = "."
+        record_sample["SKUA_REASONS"] = (".",)
     sample = record.samples[sample_name]
-    sample["SKUA_ASSESSMENT_STATUS"] = stats.assessment_status.value
+    sample["SKUA_ASSESSMENT"] = stats.assessment_status.value
     if stats.assessment_reasons:
-        sample["SKUA_ASSESSMENT_REASONS"] = stats.assessment_reasons
+        sample["SKUA_REASONS"] = stats.assessment_reasons
     record.info["SKUA_PON_SAMPLE_COUNT"] = len(normal_samples_included)
     record.info["SKUA_PON_ALT_FWD"] = normal_output_evidence.alt_forward
     record.info["SKUA_PON_ALT_REV"] = normal_output_evidence.alt_reverse
@@ -910,7 +909,7 @@ def _annotate_pon_record(
     record.info["SKUA_PON_NON_ALT_REV"] = normal_output_evidence.non_alt_reverse
     record.info["SKUA_PON_USABLE"] = normal_output_evidence.usable
     record.info["SKUA_PON_UNUSABLE"] = normal_output_evidence.unusable
-    record.info["SKUA_PON_DISPERSION_FACTOR"] = float(stats.dispersion_rho)
+    record.info["SKUA_PON_RHO"] = float(stats.dispersion_rho)
     record.info["SKUA_ARTIFACT_PRIOR"] = float(prior_artifact_probability)
 
 

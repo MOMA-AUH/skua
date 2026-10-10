@@ -3,7 +3,8 @@
 Run with ``python -I tests/artifact_smoke.py --expected-version VERSION``.
 All inputs are small synthetic, coordinate-sorted, indexed files. The case has
 four paired fragments (two ALT, two reference); the normal has ten reference
-fragments. Both mates overlap each target and must count once per fragment.
+fragments. Both mates overlap the first two targets and must count once per
+fragment. A third target has no coverage and must have missing model scores.
 """
 
 import argparse
@@ -85,16 +86,26 @@ def exercise(root: Path, reference: Path, targets: Path, suffix: str) -> list:
         cli("annotate", "--alignment", str(case), "--reference", str(reference),
             "--output", str(output), *source_args)
         values = annotation_values(output)
-        assert len(values) == 2
+        assert len(values) == 3
         info, sample = values[0]
         assert sample["SKUA_ALT_FWD"] == sample["SKUA_ALT_REV"] == 1
         assert sample["SKUA_NON_ALT_FWD"] == sample["SKUA_NON_ALT_REV"] == 1
         assert sample["SKUA_USABLE"] == 4
-        assert sample["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
+        assert sample["SKUA_ASSESSMENT"] == "ASSESSED"
+        assert sample["SKUA_REASONS"] == (".",)
         assert info["SKUA_PON_USABLE"] == 10
         assert info["SKUA_PON_SAMPLE_COUNT"] == 1
+        assert 0 < info["SKUA_PON_RHO"] < 1
+        assert isinstance(sample["SKUA_LBF"], float)
         assert sample["SKUA_ARTIFACT_POSTERIOR"] is not None
         assert values[1][1]["SKUA_ALT_FWD"] == values[1][1]["SKUA_ALT_REV"] == 0
+        uncovered_info, uncovered_sample = values[2]
+        assert uncovered_info["SKUA_STATUS"] == "ANNOTATED"
+        assert uncovered_info["SKUA_PON_USABLE"] == uncovered_sample["SKUA_USABLE"] == 0
+        assert uncovered_sample["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+        assert uncovered_sample["SKUA_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
+        assert uncovered_sample["SKUA_ARTIFACT_POSTERIOR"] is None
+        assert uncovered_sample["SKUA_LBF"] is None
         results.append(values)
     assert results[0] == results[1] == results[2], "Direct/cached evidence or scores differ"
     return results[0]
@@ -119,7 +130,8 @@ def main() -> None:
             "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=200>\n"
             "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
             "chr1\t21\t.\tA\tT\t.\tPASS\t.\n"
-            "chr1\t25\t.\tA\tG\t.\tPASS\t.\n", encoding="utf-8",
+            "chr1\t25\t.\tA\tG\t.\tPASS\t.\n"
+            "chr1\t151\t.\tA\tT\t.\tPASS\t.\n", encoding="utf-8",
         )
         bam_result = exercise(root, reference, targets, "bam")
         cram_result = exercise(root, reference, targets, "cram")

@@ -22,7 +22,7 @@ def _evidence(alt_forward=0, alt_reverse=0, non_alt_forward=0, non_alt_reverse=0
     )
 
 
-def test_zero_evidence_retains_prior_but_is_not_assessed() -> None:
+def test_zero_evidence_has_no_model_scores() -> None:
     stats = skua.compute_stats(
         _evidence(), _evidence(), per_sample_evidences=[],
         prior_artifact_probability=0.001,
@@ -30,8 +30,8 @@ def test_zero_evidence_retains_prior_but_is_not_assessed() -> None:
 
     assert stats.assessment_status == "INSUFFICIENT_EVIDENCE"
     assert stats.assessment_reasons == ("CASE_DEPTH", "NORMAL_DEPTH")
-    assert stats.artifact_posterior == pytest.approx(0.001)
-    assert stats.log_bayes_factor_artifact_vs_variant == 0
+    assert stats.artifact_posterior is None
+    assert stats.log_bayes_factor_artifact_vs_variant is None
     assert stats.case_counts["alt_forward"] == 0
     assert stats.normal_counts["non_alt_forward"] == 0
 
@@ -47,7 +47,7 @@ def test_zero_evidence_retains_prior_but_is_not_assessed() -> None:
         ({"min_normal_strand_depth": 5}, ("NORMAL_STRAND_DEPTH",)),
     ],
 )
-def test_assessment_thresholds_are_inclusive_and_do_not_change_scores(overrides, reasons) -> None:
+def test_assessment_thresholds_gate_scores_and_preserve_counts(overrides, reasons) -> None:
     limits = dict(
         min_case_depth=4, min_normal_depth=8, min_normal_samples=2,
         min_case_strand_depth=2, min_normal_strand_depth=4,
@@ -63,8 +63,29 @@ def test_assessment_thresholds_are_inclusive_and_do_not_change_scores(overrides,
     )
     assert stats.assessment_status == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
     assert stats.assessment_reasons == reasons
-    assert stats.artifact_posterior == baseline.artifact_posterior
-    assert stats.log_bayes_factor_artifact_vs_variant == baseline.log_bayes_factor_artifact_vs_variant
+    assert stats.case_counts == baseline.case_counts
+    assert stats.normal_counts == baseline.normal_counts
+    if reasons:
+        assert stats.artifact_posterior is None
+        assert stats.log_bayes_factor_artifact_vs_variant is None
+    else:
+        assert stats.artifact_posterior == baseline.artifact_posterior
+        assert stats.log_bayes_factor_artifact_vs_variant == baseline.log_bayes_factor_artifact_vs_variant
+
+
+@pytest.mark.parametrize(("rho", "expected"), [(1e-8, 1e-6), (1 - 1e-8, 1 - 1e-6)])
+def test_assessment_thresholds_preserve_bounded_dispersion(rho, expected) -> None:
+    case, normal = _evidence(1, 1, 1, 1), _evidence(0, 0, 10, 10)
+    assessed = skua.compute_stats(case, normal, rho=rho)
+    insufficient = skua.compute_stats(
+        case, normal, rho=rho,
+        assessment_thresholds=skua.AssessmentThresholds(min_case_depth=5),
+    )
+    assert assessed.assessment_status == "ASSESSED"
+    assert insufficient.assessment_status == "INSUFFICIENT_EVIDENCE"
+    assert assessed.dispersion_rho == insufficient.dispersion_rho == expected
+    assert insufficient.artifact_posterior is None
+    assert insufficient.log_bayes_factor_artifact_vs_variant is None
 
 
 @pytest.mark.parametrize("name", [
@@ -135,7 +156,7 @@ def _write_inputs(tmp_path, case, normals):
 
 @pytest.mark.parametrize("cached", [False, True], ids=["direct", "cached"])
 @pytest.mark.parametrize("suffix", [".vcf", ".vcf.gz"])
-def test_reasons_format_is_present_only_on_records_with_reasons(tmp_path, cached, suffix):
+def test_reasons_format_is_present_on_all_model_annotated_records(tmp_path, cached, suffix):
     targets, case_path, normal_paths, _ = _write_inputs(
         tmp_path, (1, 1, 1, 1), [(0, 0, 2, 2)],
     )
@@ -161,15 +182,30 @@ def test_reasons_format_is_present_only_on_records_with_reasons(tmp_path, cached
             )
 
     with pysam.VariantFile(str(output)) as vcf:
-        assert "SKUA_ASSESSMENT_REASONS" in vcf.header.formats
+        for field, number, kind in (
+            ("SKUA_LBF", 1, "Float"),
+            ("SKUA_ASSESSMENT", 1, "String"),
+            ("SKUA_REASONS", ".", "String"),
+        ):
+            assert vcf.header.formats[field].number == number
+            assert vcf.header.formats[field].type == kind
+        assert vcf.header.info["SKUA_PON_RHO"].number == 1
+        assert vcf.header.info["SKUA_PON_RHO"].type == "Float"
         assessed, insufficient = list(vcf)
-        assert assessed.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
-        assert "SKUA_ASSESSMENT_REASONS" not in assessed.format
-        assert insufficient.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "INSUFFICIENT_EVIDENCE"
-        assert insufficient.samples["CASE"]["SKUA_ASSESSMENT_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
-        assert insufficient.samples["OTHER"]["SKUA_ASSESSMENT_REASONS"] == (".",)
+        assert assessed.samples["CASE"]["SKUA_ASSESSMENT"] == "ASSESSED"
+        assert assessed.samples["CASE"]["SKUA_REASONS"] == (".",)
+        assert tuple(assessed.format) == tuple(insufficient.format)
+        assert insufficient.samples["CASE"]["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+        assert insufficient.samples["CASE"]["SKUA_REASONS"] == ("CASE_DEPTH", "NORMAL_DEPTH")
+        assert insufficient.samples["OTHER"]["SKUA_REASONS"] == (".",)
+        for field in ("SKUA_LBF", "SKUA_ARTIFACT_POSTERIOR"):
+            assert isinstance(assessed.samples["CASE"][field], float)
+            assert insufficient.samples["CASE"][field] is None
+            assert assessed.samples["OTHER"][field] is None
+            assert insufficient.samples["OTHER"][field] is None
         for record in (assessed, insufficient):
-            assert record.samples["OTHER"]["SKUA_ASSESSMENT_STATUS"] == "."
+            assert record.samples["OTHER"]["SKUA_ASSESSMENT"] == "."
+            assert record.samples["OTHER"]["SKUA_REASONS"] == (".",)
             assert record.samples["CASE"]["GT"] == (0, 1)
             assert record.samples["OTHER"]["GT"] == (0, 0)
 
@@ -203,7 +239,7 @@ def test_reasons_format_is_present_only_on_records_with_reasons(tmp_path, cached
                      4, 4, 1, id="below-all-boundaries-after-truncation"),
     ],
 )
-def test_cli_assessment_preserves_counts_and_scores(
+def test_cli_and_json_assessment_preserve_counts_and_gate_scores(
     tmp_path, mode, case, normals, thresholds, reasons, case_depth, normal_depth, normal_samples,
 ) -> None:
     targets, case_path, normal_paths, normal_list = _write_inputs(tmp_path, case, normals)
@@ -230,21 +266,28 @@ def test_cli_assessment_preserves_counts_and_scores(
         record = next(vcf)
         sample = record.samples["CASE"]
         assert record.info["SKUA_STATUS"] == "ANNOTATED"
-        assert sample["SKUA_ASSESSMENT_STATUS"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
-        assert "SKUA_ASSESSMENT_REASONS" in vcf.header.formats
+        assert sample["SKUA_ASSESSMENT"] == ("INSUFFICIENT_EVIDENCE" if reasons else "ASSESSED")
+        assert "SKUA_REASONS" in vcf.header.formats
         if reasons:
-            assert sample["SKUA_ASSESSMENT_REASONS"] == reasons
+            assert sample["SKUA_REASONS"] == reasons
         else:
-            assert "SKUA_ASSESSMENT_REASONS" not in record.format
+            assert sample["SKUA_REASONS"] == (".",)
         assert sample["SKUA_USABLE"] == case_depth
         assert sample["SKUA_UNUSABLE"] == 1
         assert record.info["SKUA_PON_SAMPLE_COUNT"] == normal_samples
         assert record.info["SKUA_PON_USABLE"] == normal_depth
         assert record.info["SKUA_PON_UNUSABLE"] == normal_samples
-        assert sample["SKUA_ARTIFACT_POSTERIOR"] is not None
-        assert sample["SKUA_LOG_BAYES_FACTOR"] is not None
-        if case_depth == 0:
-            assert sample["SKUA_ARTIFACT_POSTERIOR"] == pytest.approx(0.001)
+        assert record.info["SKUA_ARTIFACT_PRIOR"] == pytest.approx((0.001,))
+        if reasons:
+            assert sample["SKUA_ARTIFACT_POSTERIOR"] is None
+            assert sample["SKUA_LBF"] is None
+            fields = str(record).strip().split("\t")
+            serialized_sample = dict(zip(fields[8].split(":"), fields[9].split(":"), strict=True))
+            assert serialized_sample["SKUA_ARTIFACT_POSTERIOR"] == "."
+            assert serialized_sample["SKUA_LBF"] == "."
+        else:
+            assert isinstance(sample["SKUA_ARTIFACT_POSTERIOR"], float)
+            assert isinstance(sample["SKUA_LBF"], float)
 
     with ExitStack() as stack:
         alignment = stack.enter_context(pysam.AlignmentFile(str(case_path)))
@@ -262,10 +305,18 @@ def test_cli_assessment_preserves_counts_and_scores(
     assert row["counts"]["case"]["unusable"] == 1
     assert row["counts"]["normal"]["usable"] == normal_depth
     assert row["stats"]["pon_sample_count"] == normal_samples
-    # Text VCF serialization retains fewer significant digits than JSON.
-    assert row["stats"]["artifact_posterior"] == pytest.approx(
-        sample["SKUA_ARTIFACT_POSTERIOR"], rel=1e-5,
-    )
+    assert row["artifact_prior"] == 0.001
+    if reasons:
+        assert row["stats"]["artifact_posterior"] is None
+        assert row["stats"]["log_bayes_factor_artifact_vs_variant"] is None
+    else:
+        # Text VCF serialization retains fewer significant digits than JSON.
+        assert row["stats"]["artifact_posterior"] == pytest.approx(
+            sample["SKUA_ARTIFACT_POSTERIOR"], rel=1e-5,
+        )
+        assert row["stats"]["log_bayes_factor_artifact_vs_variant"] == pytest.approx(
+            sample["SKUA_LBF"], rel=1e-5,
+        )
 
 
 @pytest.mark.parametrize("samples", [[], [_evidence(2, 2)]])
@@ -279,6 +330,8 @@ def test_stats_checks_retained_normals_even_when_supplied_aggregate_has_depth(sa
     assert stats.normal_counts == {
         "alt_forward": 0, "alt_reverse": 0, "non_alt_forward": 0, "non_alt_reverse": 0,
     }
+    assert stats.artifact_posterior is None
+    assert stats.log_bayes_factor_artifact_vs_variant is None
 
 
 def test_aggregate_only_stats_cannot_claim_to_meet_a_sample_count_requirement() -> None:
@@ -289,6 +342,8 @@ def test_aggregate_only_stats_cannot_claim_to_meet_a_sample_count_requirement() 
     )
     assert stats.assessment_status == "INSUFFICIENT_EVIDENCE"
     assert stats.assessment_reasons == ("NORMAL_SAMPLE_COUNT_UNAVAILABLE",)
+    assert stats.artifact_posterior is None
+    assert stats.log_bayes_factor_artifact_vs_variant is None
 
 
 @pytest.mark.parametrize("source", ["--normal-list", "--pon"])
@@ -314,7 +369,11 @@ def test_invalid_cli_thresholds_preserve_existing_output_and_indexes(tmp_path, c
 
 
 @pytest.mark.parametrize("cached", [False, True], ids=["direct", "vcf-pon"])
-def test_force_replaces_assessment_and_leaves_unsupported_and_other_samples_unassessed(tmp_path, cached):
+@pytest.mark.parametrize("min_case_depth", [1, 5])
+@pytest.mark.parametrize("legacy_fields", [False, True], ids=["v1-fields", "legacy-fields"])
+def test_force_replaces_assessment_and_scores_without_assessing_unsupported_or_other_samples(
+    tmp_path, cached, min_case_depth, legacy_fields,
+):
     targets, case_path, _, normal_list = _write_inputs(
         tmp_path, (1, 1, 1, 1), [(0, 0, 2, 2)],
     )
@@ -327,30 +386,64 @@ def test_force_replaces_assessment_and_leaves_unsupported_and_other_samples_unas
         ]) == 0
         source_args = ["--pon", str(panel)]
     candidates = tmp_path / "candidates.vcf"
-    candidates.write_text(
+    candidate_text = (
         "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n"
+        '##INFO=<ID=SKUA_PON_DISPERSION_FACTOR,Number=1,Type=Float,Description="Old">\n'
         '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
         '##FORMAT=<ID=SKUA_ASSESSMENT_STATUS,Number=1,Type=String,Description="Old">\n'
         '##FORMAT=<ID=SKUA_ASSESSMENT_REASONS,Number=.,Type=String,Description="Old">\n'
+        '##FORMAT=<ID=SKUA_ARTIFACT_POSTERIOR,Number=1,Type=Float,Description="Old">\n'
+        '##FORMAT=<ID=SKUA_LOG_BAYES_FACTOR,Number=1,Type=Float,Description="Old">\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tCASE\tOTHER\n"
-        "chr1\t106\t.\tA\tT\t.\tPASS\t.\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
-        "\t0/1:INSUFFICIENT_EVIDENCE:CASE_DEPTH\t0/0:ASSESSED:.\n"
-        "chr1\t206\t.\tA\t<DEL>\t.\tPASS\t.\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
-        "\t0/1:ASSESSED:.\t0/0:ASSESSED:.\n",
+        "chr1\t106\t.\tA\tT\t.\tPASS\tSKUA_PON_DISPERSION_FACTOR=0.9\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
+        ":SKUA_ARTIFACT_POSTERIOR:SKUA_LOG_BAYES_FACTOR"
+        "\t0/1:INSUFFICIENT_EVIDENCE:CASE_DEPTH:0.001:-8\t0/0:ASSESSED:.:0.2:-1\n"
+        "chr1\t206\t.\tA\t<DEL>\t.\tPASS\tSKUA_PON_DISPERSION_FACTOR=0.9\tGT:SKUA_ASSESSMENT_STATUS:SKUA_ASSESSMENT_REASONS"
+        ":SKUA_ARTIFACT_POSTERIOR:SKUA_LOG_BAYES_FACTOR"
+        "\t0/1:ASSESSED:.:0.001:-8\t0/0:ASSESSED:.:0.2:-1\n"
     )
+    renames = {
+        "SKUA_LOG_BAYES_FACTOR": "SKUA_LBF",
+        "SKUA_PON_DISPERSION_FACTOR": "SKUA_PON_RHO",
+        "SKUA_ASSESSMENT_STATUS": "SKUA_ASSESSMENT",
+        "SKUA_ASSESSMENT_REASONS": "SKUA_REASONS",
+    }
+    if not legacy_fields:
+        for old, new in renames.items():
+            candidate_text = candidate_text.replace(old, new)
+    candidates.write_text(candidate_text)
     output = tmp_path / "calls.vcf"
     assert main([
         "annotate", "--vcf", str(candidates), "--alignment", str(case_path),
-        "--output", str(output), "--force", *source_args,
+        "--output", str(output), "--force", "--min-case-depth", str(min_case_depth), *source_args,
     ]) == 0
     with pysam.VariantFile(str(output)) as vcf:
+        for old in renames:
+            assert old not in vcf.header.info
+            assert old not in vcf.header.formats
         supported, unsupported = list(vcf)
-        assert supported.samples["CASE"]["SKUA_ASSESSMENT_STATUS"] == "ASSESSED"
-        assert "SKUA_ASSESSMENT_REASONS" not in supported.format
-        assert supported.samples["OTHER"].get("SKUA_ASSESSMENT_STATUS") in (None, ".")
+        sample = supported.samples["CASE"]
+        assert sample["SKUA_USABLE"] == 4
+        assert supported.info["SKUA_PON_RHO"] == pytest.approx(1e-4)
+        if min_case_depth == 1:
+            assert sample["SKUA_ASSESSMENT"] == "ASSESSED"
+            assert sample["SKUA_REASONS"] == (".",)
+            assert isinstance(sample["SKUA_ARTIFACT_POSTERIOR"], float)
+            assert isinstance(sample["SKUA_LBF"], float)
+        else:
+            assert sample["SKUA_ASSESSMENT"] == "INSUFFICIENT_EVIDENCE"
+            assert sample["SKUA_REASONS"] == ("CASE_DEPTH",)
+            assert sample["SKUA_ARTIFACT_POSTERIOR"] is None
+            assert sample["SKUA_LBF"] is None
+        assert supported.samples["OTHER"]["SKUA_ARTIFACT_POSTERIOR"] is None
+        assert supported.samples["OTHER"]["SKUA_LBF"] is None
+        assert supported.samples["OTHER"].get("SKUA_ASSESSMENT") in (None, ".")
+        assert supported.samples["OTHER"]["SKUA_REASONS"] == (".",)
         assert unsupported.info["SKUA_STATUS"] == "UNSUPPORTED_SYMBOLIC_ALLELE"
-        assert "SKUA_ASSESSMENT_STATUS" not in unsupported.format
-        assert "SKUA_ASSESSMENT_REASONS" not in unsupported.format
+        assert "SKUA_PON_RHO" not in unsupported.info
+        assert "SKUA_ASSESSMENT" not in unsupported.format
+        assert "SKUA_REASONS" not in unsupported.format
         assert "SKUA_ARTIFACT_POSTERIOR" not in unsupported.format
+        assert "SKUA_LBF" not in unsupported.format
         assert unsupported.samples["CASE"]["GT"] == (0, 1)
         assert unsupported.samples["OTHER"]["GT"] == (0, 0)

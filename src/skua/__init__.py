@@ -1,4 +1,9 @@
-"""Public Python API for annotating simple variants with read evidence."""
+"""Supported Python API for annotating supplied small variants with read evidence.
+
+The v1 compatibility boundary is the names in ``__all__`` and their documented
+behavior. See ``docs/v1-contract.md`` for sample selection, validation, output,
+and PON compatibility; submodule helpers are implementation details.
+"""
 
 from .core import (
     AnnotationStatus,
