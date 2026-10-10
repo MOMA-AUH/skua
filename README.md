@@ -210,7 +210,8 @@ model; absence of an assessment must not be interpreted as `ASSESSED`.
 
 **Scores and counts are retained for `INSUFFICIENT_EVIDENCE` records.** In
 particular, a zero-case record still has log Bayes factor `0` and posterior equal
-to its effective prior. Such a score is not an evidence-supported assessment.
+to its effective prior after numerical bounding to `[1e-12, 1 - 1e-12]`
+(within floating-point precision). Such a score is not an evidence-supported assessment.
 PON counts continue to describe only the normals retained after truncation;
 empty panels and all-normals-truncated sites have zero pooled usable depth.
 `--strict` concerns allele support and does not reject insufficient evidence.

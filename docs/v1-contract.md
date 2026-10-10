@@ -150,7 +150,9 @@ Statistical inputs must be finite: `0 < truncate <= 1`, `pseudocount > 0`,
 `0 < prior_artifact_probability < 1`, `0 < rho < 1`, and
 `0 < mu_min <= mu_max < 1`. Defaults are truncation `0.1`, pseudocount
 `sys.float_info.epsilon`, prior `0.5`, rho `1e-4`, and mu bounds `1e-6` and
-`1 - 1e-6`. Validation applies even at zero depth. Supplied per-sample evidence
+`1 - 1e-6`. Validation applies even at zero depth. After validation, the model
+bounds the prior to `[1e-12, 1 - 1e-12]` for numerical stability; the recorded
+input prior remains unchanged. Supplied per-sample evidence
 is authoritative, including an empty list: retained normals determine pooled
 counts, dispersion, scores and eligibility, replacing the aggregate argument.
 Truncation retains normals whose ALT fraction, adjusted with machine epsilon
@@ -238,7 +240,8 @@ Assessment reasons are `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 `NORMAL_SAMPLE_COUNT_UNAVAILABLE`, `CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`.
 `ANNOTATED` does not imply `ASSESSED`. Numeric scores remain present for
 `INSUFFICIENT_EVIDENCE`; at zero case depth the log Bayes factor is zero and the
-posterior equals the prior. Consumers must check eligibility before using a
+posterior equals the numerically bounded prior within floating-point precision.
+Consumers must check eligibility before using a
 score as an assessment. Missing assessment is not an implicit pass.
 
 An explicit valid record prior overrides the fallback; absent/missing prior
