@@ -118,19 +118,19 @@ def _assessment_reasons(
 
 @dataclass(frozen=True)
 class Stats:
-    """Case/PON summary with eligibility separate from retained numeric scores.
+    """Case/PON summary with model scores only for assessed evidence.
 
     ``assessment_reasons`` lists all unmet requirements, or is empty when
-    ``assessment_status`` is ASSESSED. Ineligible scores must not be treated
-    as evidence-supported assessments.
+    ``assessment_status`` is ASSESSED. The log Bayes factor and artifact
+    posterior are None when evidence is insufficient; counts remain available.
     """
 
     case_counts: dict[str, int]
     normal_counts: dict[str, int]
     background_rate_by_channel: dict[str, float]
     expected_case_counts: dict[str, float]
-    log_bayes_factor_artifact_vs_variant: float
-    artifact_posterior: float
+    log_bayes_factor_artifact_vs_variant: float | None
+    artifact_posterior: float | None
     dispersion_rho: float
     pseudocount: float
     assessment_status: AssessmentStatus
@@ -330,7 +330,9 @@ def compute_stats(
     The retained per-sample pool also replaces ``normal_evidence`` for counts,
     background summaries, scoring, and eligibility, including for an empty list.
 
-    ``assessment_thresholds`` controls eligibility, never the numeric scores.
+    ``assessment_thresholds`` controls whether model scores are available.
+    Ineligible evidence returns None for the log Bayes factor and posterior;
+    counts and diagnostics remain available. Eligible scores are unchanged.
     Defaults exclude zero case/normal depth without imposing assay-specific
     sample-count or strand requirements. An aggregate-only pool cannot satisfy
     a positive minimum sample count: its reason is NORMAL_SAMPLE_COUNT_UNAVAILABLE.
@@ -389,9 +391,12 @@ def compute_stats(
     N_fw = X_fw + normal_counts["non_alt_forward"]
     N_bw = X_bw + normal_counts["non_alt_reverse"]
 
-    if case_total == 0:
-        log_bayes_factor = 0.0
-    else:
+    assessment_reasons = _assessment_reasons(
+        case_evidence, normal_evidence, normal_sample_count, assessment_thresholds,
+    )
+    log_bayes_factor: float | None = None
+    artifact_posterior: float | None = None
+    if not assessment_reasons:
         rho = _bound(rho, 1e-6, 1 - 1e-6)
         disp = (1.0 - rho) / rho
 
@@ -435,23 +440,20 @@ def compute_stats(
             - _logbb(X_bw, N_bw, nu_bw_scaled, disp)
         )
 
-    prior_artifact_probability = _bound(
-        prior_artifact_probability,
-        1e-12,
-        1 - 1e-12,
-    )
-    odds_artifact = prior_artifact_probability / (1.0 - prior_artifact_probability)
-    log_posterior_odds_artifact = log_bayes_factor + math.log(odds_artifact)
-    if log_posterior_odds_artifact >= 0:
-        exp_neg_delta = math.exp(-log_posterior_odds_artifact)
-        artifact_posterior = 1.0 / (1.0 + exp_neg_delta)
-    else:
-        exp_delta = math.exp(log_posterior_odds_artifact)
-        artifact_posterior = exp_delta / (1.0 + exp_delta)
+        prior_artifact_probability = _bound(
+            prior_artifact_probability,
+            1e-12,
+            1 - 1e-12,
+        )
+        odds_artifact = prior_artifact_probability / (1.0 - prior_artifact_probability)
+        log_posterior_odds_artifact = log_bayes_factor + math.log(odds_artifact)
+        if log_posterior_odds_artifact >= 0:
+            exp_neg_delta = math.exp(-log_posterior_odds_artifact)
+            artifact_posterior = 1.0 / (1.0 + exp_neg_delta)
+        else:
+            exp_delta = math.exp(log_posterior_odds_artifact)
+            artifact_posterior = exp_delta / (1.0 + exp_delta)
 
-    assessment_reasons = _assessment_reasons(
-        case_evidence, normal_evidence, normal_sample_count, assessment_thresholds,
-    )
     return Stats(
         case_counts=case_counts,
         normal_counts=normal_counts,

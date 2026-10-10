@@ -143,15 +143,18 @@ See [indel limits and examples](indel-representations.md).
 `compute_stats` returns case/normal channel counts, `background_rate_by_channel`,
 `expected_case_counts`, `log_bayes_factor_artifact_vs_variant`,
 `artifact_posterior`, `dispersion_rho`, `pseudocount`, `assessment_status`, and
-`assessment_reasons`. The log Bayes factor is the natural log of
-artifact-versus-variant evidence; lower posterior means stronger variant support.
+`assessment_reasons`. The two model score fields have type `float | None`:
+they are `None` whenever status is `INSUFFICIENT_EVIDENCE`. Counts and diagnostic
+summaries remain available. For assessed evidence, the log Bayes factor is the
+natural log of artifact-versus-variant evidence; lower posterior means stronger
+variant support.
 
 Statistical inputs must be finite: `0 < truncate <= 1`, `pseudocount > 0`,
 `0 < prior_artifact_probability < 1`, `0 < rho < 1`, and
 `0 < mu_min <= mu_max < 1`. Defaults are truncation `0.1`, pseudocount
 `sys.float_info.epsilon`, prior `0.5`, rho `1e-4`, and mu bounds `1e-6` and
-`1 - 1e-6`. Validation applies even at zero depth. After validation, the model
-bounds the prior to `[1e-12, 1 - 1e-12]` for numerical stability; the recorded
+`1 - 1e-6`. Validation applies even at zero depth. When evidence is assessed, the
+model bounds the prior to `[1e-12, 1 - 1e-12]` for numerical stability; the recorded
 input prior remains unchanged. Supplied per-sample evidence
 is authoritative, including an empty list: retained normals determine pooled
 counts, dispersion, scores and eligibility, replacing the aggregate argument.
@@ -170,8 +173,9 @@ Each supported row contains `contig`, one-based `pos1`, `ref`, `alt`, and
 `counts.case` with the seven evidence fields. Normal-model rows additionally
 contain post-truncation `counts.normal`, `artifact_prior`, and `stats` with
 `artifact_posterior`, `log_bayes_factor_artifact_vs_variant`, `dispersion_factor`,
-`pon_sample_count`, `assessment_status`, `assessment_reasons`. Reasons are a list,
-empty when assessed. JSON model priors are constant API arguments; record INFO
+`pon_sample_count`, `assessment_status`, `assessment_reasons`. Both score keys
+remain present with JSON `null` values when evidence is insufficient. Reasons
+are a list, empty when assessed. JSON model priors are constant API arguments; record INFO
 priors are not used. Cached PON counts do not store `unusable_by_reason`; their
 Python evidence objects return an empty reason map.
 
@@ -220,7 +224,7 @@ fields require live normals or a cached PON. Counts are nonnegative integers.
 | --- | --- | --- | --- |
 | FORMAT `SKUA_ALT_FWD`, `SKUA_ALT_REV`, `SKUA_NON_ALT_FWD`, `SKUA_NON_ALT_REV` | 1 | Integer | Selected case strand counts. |
 | FORMAT `SKUA_USABLE`, `SKUA_UNUSABLE` | 1 | Integer | Case usable/unusable evidence; usable equals the four strand counts' sum. |
-| FORMAT `SKUA_LOG_BAYES_FACTOR`, `SKUA_ARTIFACT_POSTERIOR` | 1 | Float | Artifact-versus-variant log evidence and artifact probability. |
+| FORMAT `SKUA_LOG_BAYES_FACTOR`, `SKUA_ARTIFACT_POSTERIOR` | 1 | Float | Artifact-versus-variant log evidence and artifact probability; missing (`.`) when evidence is insufficient. |
 | FORMAT `SKUA_ASSESSMENT_STATUS` | 1 | String | `ASSESSED` or `INSUFFICIENT_EVIDENCE`. |
 | FORMAT `SKUA_ASSESSMENT_REASONS` | . | String | All unmet requirements; absent from a record's FORMAT when assessed. |
 | INFO `SKUA_STATUS` | 1 | String | Annotation outcome for every record. |
@@ -238,11 +242,14 @@ not insufficient evidence.
 
 Assessment reasons are `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 `NORMAL_SAMPLE_COUNT_UNAVAILABLE`, `CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`.
-`ANNOTATED` does not imply `ASSESSED`. Numeric scores remain present for
-`INSUFFICIENT_EVIDENCE`; at zero case depth the log Bayes factor is zero and the
-posterior equals the numerically bounded prior within floating-point precision.
-Consumers must check eligibility before using a
-score as an assessment. Missing assessment is not an implicit pass.
+`ANNOTATED` does not imply `ASSESSED`. For every `INSUFFICIENT_EVIDENCE` result,
+both model scores are missing (`.`) in VCF, `None` in Python, and `null` in JSON.
+Counts, the input prior, status and reasons remain available. This includes
+zero case/normal depth and any unmet configured depth, sample-count or strand
+requirement. Tightening thresholds can suppress scores but does not change
+counts or the scores of records that remain assessed. Forced reannotation also
+replaces old numeric scores with missing values when the new assessment fails.
+Missing assessment is not an implicit pass.
 
 An explicit valid record prior overrides the fallback; absent/missing prior
 uses the fallback. In separate-VCF cached mode that VCF owns the prior, whereas

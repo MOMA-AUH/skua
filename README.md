@@ -184,8 +184,8 @@ Output FORMAT fields:
 - `SKUA_NON_ALT_REV`: Count of non-ALT reads on reverse strand
 - `SKUA_USABLE`: Total usable reads at this locus
 - `SKUA_UNUSABLE`: Total unusable reads (low quality, INDELs at locus, etc.)
-- `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1)
-- `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models
+- `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1); missing when evidence is insufficient
+- `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models; missing when evidence is insufficient
 - `SKUA_ASSESSMENT_STATUS`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
 - `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; omitted from a record's FORMAT when there are no reasons
 
@@ -208,10 +208,12 @@ record status and receives no new assessment or score fields. Unselected samples
 have missing assessment values. The evidence-only Python APIs do not assess a
 model; absence of an assessment must not be interpreted as `ASSESSED`.
 
-**Scores and counts are retained for `INSUFFICIENT_EVIDENCE` records.** In
-particular, a zero-case record still has log Bayes factor `0` and posterior equal
-to its effective prior after numerical bounding to `[1e-12, 1 - 1e-12]`
-(within floating-point precision). Such a score is not an evidence-supported assessment.
+**Model scores are reported only for `ASSESSED` records.** For
+`INSUFFICIENT_EVIDENCE`, the log Bayes factor and artifact posterior are missing
+(`.`) in VCF, `None` in Python `Stats`, and `null` in JSON. Counts, the input
+prior, assessment status and reasons remain available to explain why assessment
+failed. This applies to every unmet requirement, including zero depth and
+configured depth, sample-count or strand minima.
 PON counts continue to describe only the normals retained after truncation;
 empty panels and all-normals-truncated sites have zero pooled usable depth.
 `--strict` concerns allele support and does not reject insufficient evidence.
@@ -239,8 +241,9 @@ variant call has been validated.
 
 All failing requirements are reported in `SKUA_ASSESSMENT_REASONS`, in this
 order: `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
-`CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`. No scores or counts are changed by
-tightening the assessment thresholds.
+`CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`. Tightening the assessment thresholds
+can make scores missing; counts are unchanged. Scores for records that remain
+`ASSESSED` are unchanged.
 
 The `SKUA_ASSESSMENT_REASONS` definition remains in the VCF header, but the
 field appears in a record's FORMAT only when the selected case has unmet

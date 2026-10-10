@@ -62,12 +62,12 @@ READ_COUNT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str], ...] = (
 )
 
 MODEL_SCORE_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
-    ("SKUA_LOG_BAYES_FACTOR", "Float", "Log Bayes factor artifact-vs-variant"),
-    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model"),
+    ("SKUA_LOG_BAYES_FACTOR", "Float", "Log Bayes factor artifact-vs-variant; missing when evidence is insufficient"),
+    ("SKUA_ARTIFACT_POSTERIOR", "Float", "Posterior probability of the artifact model; missing when evidence is insufficient"),
 )
 
 ASSESSMENT_FORMAT_FIELD_DEFINITIONS: tuple[tuple[str, int | str, str], ...] = (
-    ("SKUA_ASSESSMENT_STATUS", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are retained"),
+    ("SKUA_ASSESSMENT_STATUS", 1, "Model eligibility: ASSESSED or INSUFFICIENT_EVIDENCE; scores are missing when evidence is insufficient"),
     ("SKUA_ASSESSMENT_REASONS", ".", "Unmet assessment requirements; missing when ASSESSED"),
 )
 
@@ -850,13 +850,13 @@ def _annotate_pon_sample_format_fields(
     record: Any,
     *,
     sample_name: str,
-    artifact_posterior: float,
-    log_bayes_factor: float,
+    artifact_posterior: float | None,
+    log_bayes_factor: float | None,
 ) -> None:
     """Set PON model output FORMAT annotations for the selected case sample."""
     sample = record.samples[sample_name]
-    sample["SKUA_LOG_BAYES_FACTOR"] = float(log_bayes_factor)
-    sample["SKUA_ARTIFACT_POSTERIOR"] = float(artifact_posterior)
+    sample["SKUA_LOG_BAYES_FACTOR"] = log_bayes_factor
+    sample["SKUA_ARTIFACT_POSTERIOR"] = artifact_posterior
 
 
 def _annotate_pon_record(
