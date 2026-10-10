@@ -130,7 +130,7 @@ def test_build_pon_round_trips_per_sample_evidence_and_metadata(tmp_path) -> Non
 
     metadata = read_pon_metadata(output_path)
     assert metadata.schema_version == 2
-    assert metadata.evidence_policy_version == 7
+    assert metadata.evidence_policy_version == 8
     assert metadata.min_baseq == 25
     assert metadata.min_mapq == 30
     assert metadata.sample_names == ("N1", "N2")
@@ -165,7 +165,7 @@ def test_build_pon_excludes_unnamed_normal_reads(tmp_path, query_name) -> None:
     [(_, (evidence,))] = read_pon_evidence(pon_path)
     assert evidence.usable == 0
     assert evidence.unusable == 2
-    assert read_pon_metadata(pon_path).evidence_policy_version == 7
+    assert read_pon_metadata(pon_path).evidence_policy_version == 8
 
 
 def _write_pon_with_count_schema(
@@ -177,7 +177,7 @@ def _write_pon_with_count_schema(
     vcf_path.write_text(
         "##fileformat=VCFv4.2\n##contig=<ID=chr1>\n"
         f"##SKUA_PON=<SchemaVersion=2,EvidencePolicyVersion={EVIDENCE_POLICY_VERSION},"
-        'MinBaseQ=20,MinMapQ=20,SkuaVersion="0.7.1">\n'
+        'MinBaseQ=20,MinMapQ=20,IndelMatching=exact_anchor,SkuaVersion="0.7.1">\n'
         '##SKUA_REFERENCE_STATUS=INSUFFICIENT_METADATA\n'
         '##SKUA_REFERENCE=<ID=chr1,Verified=0>\n'
         + "".join(
@@ -449,7 +449,7 @@ def test_inspect_pon_reports_header_metadata_without_scanning_targets(tmp_path) 
     assert inspection.index_present is True
     assert inspection.metadata_record_count == 1
     assert inspection.schema_version == "2"
-    assert inspection.evidence_policy_version == "7"
+    assert inspection.evidence_policy_version == "8"
     assert inspection.min_baseq == "25"
     assert inspection.min_mapq == "30"
     assert inspection.sample_names == ("N1",)

@@ -641,12 +641,12 @@ def test_annotate_vcf_late_failure_does_not_publish_a_partial_output(
         encoding="utf-8",
     )
     output_path = tmp_path / "annotated.vcf"
-    original = core.annotate_variants_from_vcf
+    original = core.annotate_variants
 
     def stop_after_one(*args, **kwargs):
         yield next(original(*args, **kwargs))
 
-    monkeypatch.setattr(core, "annotate_variants_from_vcf", stop_after_one)
+    monkeypatch.setattr(core, "annotate_variants", stop_after_one)
 
     with pytest.raises(RuntimeError, match="ended before"):
         annotate_vcf(alignment_file, vcf_path, output_path=output_path)

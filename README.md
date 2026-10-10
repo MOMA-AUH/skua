@@ -32,7 +32,7 @@ Key input parameters:
 - `--normal-list`: Text file with one normal BAM or CRAM path per line
 - `--pon`: Precomputed PON BCF; mutually exclusive with `--normal-list`
 - `--sample`: Case sample to annotate when VCF/BAM sample matching is ambiguous
-- `--reference`: Reference FASTA file, required when any input alignment is CRAM
+- `--reference`: Reference FASTA file; enables equivalent-indel matching, and is required for CRAM and PONs built in reference matching mode
 - `--output`: Optional output VCF path; if omitted, output is written to `stdout`
 - `--force`: Replace an existing output and recompute existing Skua annotations
 
@@ -119,10 +119,29 @@ interval. An internal insertion, deletion, or reference skip makes that read
 unusable for the simple MNV, regardless of the inserted bases' quality. Insertions
 outside the MNV interval do not affect this continuity check.
 
-Indel support requires an explicit CIGAR insertion or deletion immediately
-after the left anchor and an aligned base on the right. Soft clips, reference
-skips, terminal or adjacent complex events, and reads without sequence or base
-qualities are unusable rather than ALT or reference evidence.
+Indel support requires an explicit CIGAR insertion or deletion with aligned
+flanks. With `--reference`, Skua also recognizes equivalent placements up to
+**100 reference bases in either direction** from the VCF anchor. For example,
+in reference `CAAAAT`, `C>CA` at the first base is supported by a read
+`CAAAAAT` with CIGAR `3M1I3M`: inserting an `A` later in the run produces the
+same allele. Rotated insertions and deletions in tandem repeats are supported
+by the same comparison.
+
+A shifted match must span both representations, including their left anchors
+and right flanks. Every read base in that comparison (including inserted bases)
+must pass the base-quality threshold, and the observed sequence must equal the
+reference-derived alternate sequence. Extra indels, clipping, reference skips,
+or unavailable flanks within the comparison cannot produce shifted ALT support.
+Skua does not infer reference sequence from read bases or MD tags, combine
+multiple events, or perform local assembly. Events outside the 100-base search
+retain the existing exact-anchor classification. Reads that do not overlap the
+VCF anchor are not fetched or rescued.
+
+Without a FASTA, indels retain exact-anchor matching. Existing exact-anchor
+quality and complex-event rules remain in effect in both modes. Python evidence
+APIs such as `annotate_variant()` and `annotate_variants()` accept
+`reference_path=` to enable shifted matching. See the reproducible
+[BWA-MEM characterization](docs/indel-representations.md) for examples and limits.
 
 Truncation controls how conservative the panel-of-normals aggregation is at each site. A normal sample is included only if its ALT fraction is strictly less than `--truncate`. With `--truncate 0.1`, normals with ALT fraction `< 0.1` are kept and normals with ALT fraction `>= 0.1` are excluded.
 
@@ -137,11 +156,11 @@ fewer than two retained normals are also unchanged.
 This correction changes the scoring model. Re-annotate existing calls to obtain
 the corrected `SKUA_PON_DISPERSION_FACTOR`, `SKUA_LOG_BAYES_FACTOR`, and
 `SKUA_ARTIFACT_POSTERIOR` values; use `--force` when refreshing existing Skua
-annotations. PONs compatible with v0.7.4 (schema 2, evidence policy 7) remain
-compatible and do not need rebuilding solely for this change: they store
-per-normal counts, and dispersion is recomputed at annotation time. Direct-normal
-and cached-PON annotation apply the same correction. Older incompatible PONs
-still require rebuilding as described below.
+annotations. The v0.8.0 scoring correction alone did not require rebuilding
+PONs: they store per-normal counts, and dispersion is recomputed at annotation
+time. The current indel evidence policy does require rebuilding policy-7 PONs,
+as described below. Direct-normal and cached-PON annotation apply the same
+scoring correction.
 
 Output FORMAT fields:
 - `SKUA_ALT_FWD`: Count of ALT-supporting reads on forward strand
@@ -153,7 +172,7 @@ Output FORMAT fields:
 - `SKUA_ARTIFACT_POSTERIOR`: Posterior probability of artifact model (0–1)
 - `SKUA_LOG_BAYES_FACTOR`: Log Bayes factor comparing artifact vs. variant models
 - `SKUA_ASSESSMENT_STATUS`: `ASSESSED` or `INSUFFICIENT_EVIDENCE` for the selected case sample
-- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; `.` when assessed
+- `SKUA_ASSESSMENT_REASONS`: Unmet evidence requirements; omitted from a record's FORMAT when there are no reasons
 
 Output INFO fields:
 - `SKUA_ARTIFACT_PRIOR`: Effective prior probability that the ALT allele is an artifact before Skua evidence
@@ -206,6 +225,11 @@ All failing requirements are reported in `SKUA_ASSESSMENT_REASONS`, in this
 order: `CASE_DEPTH`, `NORMAL_DEPTH`, `NORMAL_SAMPLE_COUNT`,
 `CASE_STRAND_DEPTH`, `NORMAL_STRAND_DEPTH`. No scores or counts are changed by
 tightening the assessment thresholds.
+
+The `SKUA_ASSESSMENT_REASONS` definition remains in the VCF header, but the
+field appears in a record's FORMAT only when the selected case has unmet
+requirements. When present on a multisample record, other samples have `.`.
+Consumers should handle the field being absent for `ASSESSED` records.
 
 For example, a downstream Python filter for a selected VCF sample can require
 eligibility before applying an illustrative posterior cutoff:
@@ -377,11 +401,21 @@ unique `CHROM`, `POS`, `REF`, and `ALT` target allele, as well as a unique
 read-group `SM` name in each normal alignment. A PON should be rebuilt when the
 reference assembly, alignment/evidence policy, or quality thresholds change.
 
-The current evidence policy is **version 7**. Normal evidence is restricted to
+The current evidence policy is **version 8**. Normal evidence is restricted to
 read groups assigned to the normal sample. Records with unavailable query names
 are excluded from usable fragment evidence, and internal insertions are excluded
 from simple-MNV evidence. PON annotation and validation require the current
 evidence-policy version.
+
+Policy 8 adds equivalent-indel matching and a required `IndelMatching` PON
+setting. Build with `--reference` for `IndelMatching=reference`; annotating with
+that PON requires the compatible FASTA. A PON built without a FASTA records
+`IndelMatching=exact_anchor`, and case evidence keeps that mode even if a FASTA
+is later supplied for reference validation or CRAM decoding. Rebuild the PON
+with a FASTA to enable shifted matching for both case and normals. Policy-7 and
+older PONs must be rebuilt from the original targets and normal alignments.
+VCF-to-PON target joins still require exact `CHROM/POS/REF/ALT` equality; this
+change reconciles read alignments, not PON target identifiers.
 
 The supported production workflow is paired-end targeted DNA mapped with
 `bwa mem`. Mapping quality is filtered only by the numeric `--min-mapq` threshold:
@@ -428,13 +462,13 @@ errors. Structural validity does not imply verified reference identity.
 
 Annotated VCFs contain one human-readable `SKUA_RUN` header record with
 `SchemaVersion=1`. It records the Skua version, mode, evidence-policy version,
-effective base/mapping-quality thresholds and read-selection
+indel matching mode, effective base/mapping-quality thresholds and read-selection
 policies. Normal-model runs also record truncation, pseudocount, prior policy
 and fallback, and all five assessment thresholds. For example, a case-only run
 with default quality thresholds writes:
 
 ```text
-##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.7.4",Mode="case_only",EvidencePolicyVersion="7",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
+##SKUA_RUN=<SchemaVersion="1",SkuaVersion="0.8.1",Mode="case_only",EvidencePolicyVersion="8",IndelMatching="exact_anchor",MinBaseQ="20",MinMapQ="20",CaseReadGroups="assigned_to_sample",NormalReadGroups="not_applicable">
 ```
 
 `SkuaVersion` reflects the installed version. Cached annotation records the
@@ -452,7 +486,7 @@ checks are unchanged.
 PONs contain `SKUA_PON` compatibility metadata, reference metadata, normal
 sample columns, and per-normal evidence. These normal identities are
 required for membership checks and are not copied into annotated VCF metadata.
-PON schema 2 and evidence policy 7 define the supported format. Artifacts with
+PON schema 2 and evidence policy 8 define the supported format. Artifacts with
 unsupported versions must be rebuilt from their original targets and alignments.
 
 Forced reannotation replaces Skua annotations and run summaries.

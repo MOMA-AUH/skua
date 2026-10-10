@@ -12,11 +12,13 @@ RUN_HEADER_KEY = "SKUA_RUN"
 def evidence_summary(
     policy_version: int, min_baseq: int, min_mapq: int, *,
     normal_read_groups: str = "assigned_to_sample",
+    indel_matching: str = "exact_anchor",
 ) -> dict[str, Any]:
     """Describe quality filters and normal read-selection policy."""
     return {
         "policy_version": policy_version, "min_baseq": min_baseq, "min_mapq": min_mapq,
         "normal_read_groups": normal_read_groups,
+        "indel_matching": indel_matching,
     }
 
 
@@ -28,6 +30,7 @@ def write_run_summary_header(header: Any, summary: dict[str, Any]) -> None:
         ("SkuaVersion", summary["skua_version"]),
         ("Mode", summary["mode"]),
         ("EvidencePolicyVersion", evidence["policy_version"]),
+        ("IndelMatching", evidence["indel_matching"]),
         ("MinBaseQ", evidence["min_baseq"]),
         ("MinMapQ", evidence["min_mapq"]),
         ("CaseReadGroups", summary["case_read_groups"]),

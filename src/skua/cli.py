@@ -203,7 +203,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample",
         help="Case sample name (required when BAM sample matching is ambiguous)",
     )
-    annotate_parser.add_argument("--reference", help="Reference FASTA path (required for CRAM)")
+    annotate_parser.add_argument(
+        "--reference",
+        help="Reference FASTA for equivalent-indel matching (required for CRAM and reference-mode PONs)",
+    )
     annotate_parser.add_argument("--output", help="Optional output VCF path (.vcf or .vcf.gz)")
     annotate_parser.add_argument(
         "--force",
@@ -251,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pon_build_parser.add_argument(
         "--reference",
-        help="Reference FASTA path (required for CRAM)",
+        help="Reference FASTA for equivalent-indel matching (required for CRAM)",
     )
     pon_build_parser.add_argument(
         "--force",
@@ -406,6 +409,7 @@ def _format_pon_inspection(inspection: PonInspection) -> str:
             f"Schema version: {value_or_missing(inspection.schema_version)}",
             "Evidence policy version: "
             f"{value_or_missing(inspection.evidence_policy_version)}",
+            f"Indel matching: {value_or_missing(inspection.indel_matching)}",
             f"Minimum base quality: {value_or_missing(inspection.min_baseq)}",
             f"Minimum mapping quality: {value_or_missing(inspection.min_mapq)}",
             f"Skua version: {value_or_missing(inspection.skua_version)}",

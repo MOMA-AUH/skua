@@ -97,6 +97,7 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
         "PON metadata records: 1\n"
         "Schema version: 2\n"
         "Evidence policy version: 7\n"
+        "Indel matching: <missing>\n"
         "Minimum base quality: 20\n"
         "Minimum mapping quality: 20\n"
         "Skua version: 0.7.3\n"
@@ -106,7 +107,7 @@ def test_main_pon_inspect_supports_text_and_json_output(monkeypatch, capsys) -> 
 
     assert cli.main(["pon", "inspect", "panel.pon.bcf", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "evidence_policy_version": "7",
+        "evidence_policy_version": "7", "indel_matching": None,
         "format": "BCF",
         "index_present": True,
         "metadata_record_count": 1,
@@ -160,7 +161,7 @@ def test_main_pon_validate_returns_one_and_emits_json_errors(monkeypatch, capsys
     assert json.loads(capsys.readouterr().out) == {
         "errors": ["PON artifact is missing its .csi index"],
         "inspection": {
-            "evidence_policy_version": "7",
+            "evidence_policy_version": "7", "indel_matching": None,
             "format": "BCF",
             "index_present": True,
             "metadata_record_count": 1,

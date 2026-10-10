@@ -22,7 +22,7 @@ from .reference import ReferenceIdentity, check_reference_compatibility, read_re
 
 
 PON_SCHEMA_VERSION = 2
-EVIDENCE_POLICY_VERSION = 7
+EVIDENCE_POLICY_VERSION = 8
 PON_HEADER_KEY = "SKUA_PON"
 _ARTIFACT_PRIOR_FIELD_ID = "SKUA_ARTIFACT_PRIOR"
 
@@ -56,6 +56,7 @@ class PonArtifactMetadata:
     skua_version: str
     sample_names: tuple[str, ...]
     reference_identity: ReferenceIdentity
+    indel_matching: str = "exact_anchor"
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class PonInspection:
     skua_version: str | None
     sample_names: tuple[str, ...]
     reference_identity: ReferenceIdentity | None = None
+    indel_matching: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         """Return a JSON-ready representation of this inspection."""
@@ -83,6 +85,7 @@ class PonInspection:
             "metadata_record_count": self.metadata_record_count,
             "schema_version": self.schema_version,
             "evidence_policy_version": self.evidence_policy_version,
+            "indel_matching": self.indel_matching,
             "min_baseq": self.min_baseq,
             "min_mapq": self.min_mapq,
             "skua_version": self.skua_version,
@@ -163,6 +166,7 @@ def inspect_pon(path: str | Path) -> PonInspection:
             skua_version=metadata.get("SkuaVersion"),
             sample_names=tuple(pon_file.header.samples),
             reference_identity=reference_identity,
+            indel_matching=metadata.get("IndelMatching"),
         )
 
 
@@ -201,6 +205,10 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
             "rebuild the PON from the original targets and normal alignments"
         )
 
+    indel_matching = items.get("IndelMatching")
+    if indel_matching not in {"exact_anchor", "reference"}:
+        raise ValueError("PON artifact has missing or invalid IndelMatching metadata; rebuild the PON")
+
     sample_names = tuple(header.samples)
     if not sample_names:
         raise ValueError("PON artifact must contain at least one normal sample")
@@ -233,6 +241,7 @@ def _parse_metadata(header: Any) -> PonArtifactMetadata:
         skua_version=items["SkuaVersion"],
         sample_names=sample_names,
         reference_identity=reference_identity,
+        indel_matching=indel_matching,
     )
 
 
@@ -472,6 +481,7 @@ def _add_pon_header_fields(
     *,
     min_baseq: int,
     min_mapq: int,
+    indel_matching: str = "exact_anchor",
 ) -> None:
     if any(record.key == PON_HEADER_KEY for record in header.records):
         raise ValueError("Target VCF already contains SKUA_PON metadata")
@@ -511,6 +521,7 @@ def _add_pon_header_fields(
         items=[
             ("SchemaVersion", str(PON_SCHEMA_VERSION)),
             ("EvidencePolicyVersion", str(EVIDENCE_POLICY_VERSION)),
+            ("IndelMatching", indel_matching),
             ("MinBaseQ", str(min_baseq)),
             ("MinMapQ", str(min_mapq)),
             ("SkuaVersion", __version__),
@@ -574,12 +585,15 @@ def write_pon_artifact(
     min_mapq: int,
     reference_identity: ReferenceIdentity,
     force: bool = False,
+    indel_matching: str = "exact_anchor",
 ) -> None:
     """Write per-normal, per-allele evidence to an immutable BCF artifact."""
     if not sample_names:
         raise ValueError("PON artifact requires at least one normal sample")
     if len(set(sample_names)) != len(sample_names):
         raise ValueError("PON normal sample names must be unique")
+    if indel_matching not in {"exact_anchor", "reference"}:
+        raise ValueError("Unknown indel matching mode")
 
     final_output_path = Path(output_path)
     final_index_path = Path(f"{final_output_path}.csi")
@@ -598,7 +612,9 @@ def write_pon_artifact(
                 if force
                 else target_vcf.header.copy()
             )
-            _add_pon_header_fields(header, min_baseq=min_baseq, min_mapq=min_mapq)
+            _add_pon_header_fields(
+                header, min_baseq=min_baseq, min_mapq=min_mapq, indel_matching=indel_matching,
+            )
             write_reference_header(header, reference_identity)
             for sample_name in sample_names:
                 header.add_sample(sample_name)
