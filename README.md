@@ -250,7 +250,6 @@ annotated with live normals or a cached PON. Its value is `.` when the selected
 case is `ASSESSED`, or the list of unmet requirements otherwise. Other samples
 have `.`. Unsupported records and case-only evidence annotation receive no
 assessment fields.
-Consumers should handle the field being absent for `ASSESSED` records.
 
 For example, a downstream Python filter for a selected VCF sample can require
 eligibility before applying an illustrative posterior cutoff:
