@@ -2,7 +2,7 @@ name: skua-dev
 channels:
   - conda-forge
 dependencies:
-  - python >=3.11
+  - python >=3.15.0
   - pip
   - conda-build
   - pytest
