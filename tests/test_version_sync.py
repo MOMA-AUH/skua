@@ -32,4 +32,11 @@ def test_version_is_synced_across_code_and_packaging() -> None:
         r'^\{\%\s*set\s+version\s*=\s*"([^"]+)"\s*\%\}$',
     )
     assert conda_version == package_version
-    assert "  - python >=3.11" in development_environment
+    python_requirement = re.search(
+        r"^  - python\s*>=\s*(\d+\.\d+(?:\.\d+)?)\s*$",
+        development_environment,
+        flags=re.MULTILINE,
+    )
+    assert python_requirement is not None
+    major, minor, *_ = (int(part) for part in python_requirement.group(1).split("."))
+    assert (major, minor) >= (3, 11)
