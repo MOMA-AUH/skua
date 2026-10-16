@@ -30,7 +30,7 @@ skua = "skua.cli:main"
 [project.optional-dependencies]
 dev = [
   "pysam>=0.22",
-  "pytest>=8.0",
+  "pytest>=9.1.1",
 ]
 
 [tool.setuptools]
