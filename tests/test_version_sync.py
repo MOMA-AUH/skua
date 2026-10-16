@@ -33,7 +33,7 @@ def test_version_is_synced_across_code_and_packaging() -> None:
     )
     assert conda_version == package_version
     python_requirement = re.search(
-        r"^  - python\s*>=\s*(\d+\.\d+(?:\.\d+)?)\s*$",
+        r'^\s*-\s*["\']?python["\']?\s*>=\s*(\d+\.\d+(?:\.\d+)?)\b',
         development_environment,
         flags=re.MULTILINE,
     )
