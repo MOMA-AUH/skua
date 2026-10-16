@@ -32,7 +32,7 @@ jobs:
         with:
           auto-update-conda: true
           activate-environment: skua-build
-          environment-file: environment.yml
+          python-version: "3.12"
           channels: conda-forge,bioconda,defaults
           channel-priority: strict
           use-mamba: true
