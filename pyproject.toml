@@ -21,7 +21,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bioinformatics",
 ]
 dependencies = [
-  "pysam>=0.22",
+  "pysam>=0.24.1",
 ]
 
 [project.scripts]
@@ -29,7 +29,7 @@ skua = "skua.cli:main"
 
 [project.optional-dependencies]
 dev = [
-  "pysam>=0.22",
+  "pysam>=0.24.1",
   "pytest>=9.1.1",
 ]
 
