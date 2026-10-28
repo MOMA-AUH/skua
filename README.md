@@ -24,7 +24,7 @@ Requires Python ≥ 3.11 and pysam ≥ 0.22, installed automatically by Conda.
 
 Prepare a coordinate-sorted VCF of unique target alleles (`targets.vcf.gz`)
 and a text file with one normal BAM or CRAM path per line (`normals.lst`).
-Build and validate the panel, then annotate a case at those targets:
+Build the panel, then annotate a case at those targets:
 
 ```bash
 skua pon build \
@@ -32,8 +32,6 @@ skua pon build \
   --normal-list normals.lst \
   --reference reference.fa \
   --output targets.pon.bcf
-
-skua pon validate targets.pon.bcf --reference reference.fa
 
 skua annotate \
   --pon targets.pon.bcf \
